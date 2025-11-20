@@ -1,4 +1,4 @@
-.PHONY: test lint bench clean
+.PHONY: test lint bench benchmark clean
 
 test:
 	go test -v -race -cover ./...
@@ -10,6 +10,14 @@ lint:
 
 bench:
 	go test -bench=. -benchmem
+
+benchmark:
+	@echo "Running benchmarks vs other Go cache libraries..."
+	@echo "Note: External libraries are only in benchmarks/ go.mod, not main go.mod"
+	@cd benchmarks && go test -bench=BenchmarkSpeed -benchmem -run=^$$
+	@echo ""
+	@echo "Running hit rate comparison (cherrypicked workload)..."
+	@cd benchmarks && go test -run=TestFIFOvsLRU_ScanResistance -v
 
 clean:
 	go clean -testcache

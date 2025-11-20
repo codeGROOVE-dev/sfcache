@@ -34,9 +34,9 @@ var (
 
 // filePersist implements PersistenceLayer using local files with gob encoding.
 type filePersist[K comparable, V any] struct {
-	dir          string
-	subdirsMu    sync.RWMutex
-	subdirsMade  map[string]bool // Cache of created subdirectories
+	dir         string
+	subdirsMu   sync.RWMutex
+	subdirsMade map[string]bool // Cache of created subdirectories
 }
 
 // ValidateKey checks if a key is valid for file persistence.

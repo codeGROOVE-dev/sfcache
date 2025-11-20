@@ -6,9 +6,25 @@ import (
 	"time"
 )
 
-// s3fifo implements the S3-FIFO eviction algorithm.
-// S3-FIFO uses three queues: Small (10%), Main (90%), and Ghost (for frequency tracking).
-// Items start in Small, get promoted to Main if accessed again, and Ghost tracks evicted keys.
+// s3fifo implements the S3-FIFO eviction algorithm from SOSP'23 paper
+// "FIFO queues are all you need for cache eviction"
+//
+// Algorithm:
+// - Small queue (S): 10% of cache, for new objects
+// - Main queue (M): 90% of cache, for promoted objects
+// - Ghost queue (G): Tracks evicted keys (no data)
+//
+// On cache miss:
+//   - If object not in ghost → insert into Small
+//   - If object in ghost → insert into Main (was accessed before)
+//
+// On eviction from Small:
+//   - If freq == 0 → evict and add to ghost
+//   - If freq > 0 → promote to Main and reset freq to 0
+//
+// On eviction from Main:
+//   - If freq == 0 → evict (don't add to ghost, already there)
+//   - If freq > 0 → reinsert to back of Main and decrement freq (lazy promotion)
 type s3fifo[K comparable, V any] struct {
 	items     map[K]*entry[K, V]
 	small     *list.List
@@ -28,8 +44,8 @@ type entry[K comparable, V any] struct {
 	key     K
 	value   V
 	element *list.Element
-	freq    int
-	inSmall bool
+	freq    int  // Access frequency counter
+	inSmall bool // True if in Small queue, false if in Main
 }
 
 // newS3FIFO creates a new S3-FIFO cache with the given capacity.
@@ -38,6 +54,7 @@ func newS3FIFO[K comparable, V any](capacity int) *s3fifo[K, V] {
 		capacity = 10000
 	}
 
+	// Small queue is 10% of capacity
 	smallCap := capacity / 10
 	if smallCap < 1 {
 		smallCap = 1
@@ -48,7 +65,7 @@ func newS3FIFO[K comparable, V any](capacity int) *s3fifo[K, V] {
 		capacity:  capacity,
 		smallCap:  smallCap,
 		mainCap:   mainCap,
-		ghostCap:  capacity,
+		ghostCap:  capacity, // Ghost queue same size as total capacity
 		items:     make(map[K]*entry[K, V]),
 		small:     list.New(),
 		main:      list.New(),
@@ -58,28 +75,28 @@ func newS3FIFO[K comparable, V any](capacity int) *s3fifo[K, V] {
 }
 
 // get retrieves a value from the cache.
+// On hit, increments frequency counter (used during eviction).
 func (c *s3fifo[K, V]) get(key K) (V, bool) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	ent, ok := c.items[key]
 	if !ok {
-		c.mu.Unlock()
 		var zero V
 		return zero, false
 	}
 
-	// Check expiration (skip time.Now() if no expiry set)
+	// Check expiration
 	if !ent.expiry.IsZero() && time.Now().After(ent.expiry) {
-		c.mu.Unlock()
 		var zero V
 		return zero, false
 	}
 
-	// Increment frequency counter (used during eviction)
+	// S3-FIFO: Increment frequency on access (lazy promotion)
+	// Items are promoted during eviction, not on access
 	ent.freq++
-	val := ent.value
-	c.mu.Unlock()
 
-	return val, true
+	return ent.value, true
 }
 
 // set adds or updates a value in the cache.
@@ -95,7 +112,7 @@ func (c *s3fifo[K, V]) set(key K, value V, expiry time.Time) {
 		return
 	}
 
-	// Check if key is in ghost queue (previously evicted)
+	// Check if key is in ghost queue (previously evicted, being re-accessed)
 	inGhost := false
 	if ghostElem, ok := c.ghostKeys[key]; ok {
 		inGhost = true
@@ -104,16 +121,17 @@ func (c *s3fifo[K, V]) set(key K, value V, expiry time.Time) {
 	}
 
 	// Create new entry
+	// S3-FIFO rule: If in ghost → insert into Main, else → insert into Small
 	ent := &entry[K, V]{
 		key:     key,
 		value:   value,
 		expiry:  expiry,
 		freq:    0,
-		inSmall: !inGhost, // If in ghost, promote directly to main
+		inSmall: !inGhost,
 	}
 
-	// Evict if necessary
-	if len(c.items) >= c.capacity {
+	// S3-FIFO: Make room if at total capacity
+	for len(c.items) >= c.capacity {
 		c.evict()
 	}
 
@@ -146,19 +164,23 @@ func (c *s3fifo[K, V]) delete(key K) {
 	delete(c.items, key)
 }
 
-// evict removes items according to S3-FIFO algorithm.
+// evict removes one item according to S3-FIFO algorithm.
+// S3-FIFO prioritizes evicting from Small queue when it has items.
 func (c *s3fifo[K, V]) evict() {
-	// Try to evict from small queue first
+	// Evict from Small queue if it has items
 	if c.small.Len() > 0 {
 		c.evictFromSmall()
 		return
 	}
 
-	// Evict from main queue
+	// Otherwise evict from Main queue
 	c.evictFromMain()
 }
 
 // evictFromSmall evicts an item from the small queue.
+// S3-FIFO rule:
+//   - If freq == 0: evict and add key to ghost
+//   - If freq > 0: promote to Main and reset freq to 0
 func (c *s3fifo[K, V]) evictFromSmall() {
 	for c.small.Len() > 0 {
 		elem := c.small.Front()
@@ -170,20 +192,25 @@ func (c *s3fifo[K, V]) evictFromSmall() {
 
 		c.small.Remove(elem)
 
-		// If accessed (freq > 0), promote to main queue
+		// One-hit wonder: never accessed since insertion
 		if ent.freq == 0 {
-			// Evict and add to ghost queue
+			// Evict and track in ghost queue
 			delete(c.items, ent.key)
 			c.addToGhost(ent.key)
 			return
 		}
-		ent.freq = 0
+
+		// Hot item: promote to Main queue
+		ent.freq = 0 // Reset frequency
 		ent.inSmall = false
 		ent.element = c.main.PushBack(ent)
 	}
 }
 
 // evictFromMain evicts an item from the main queue.
+// S3-FIFO rule:
+//   - If freq == 0: evict (already in ghost from Small eviction)
+//   - If freq > 0: reinsert to back of Main (lazy promotion) and decrement freq
 func (c *s3fifo[K, V]) evictFromMain() {
 	for c.main.Len() > 0 {
 		elem := c.main.Front()
@@ -195,25 +222,28 @@ func (c *s3fifo[K, V]) evictFromMain() {
 
 		c.main.Remove(elem)
 
-		// If accessed (freq > 0), move to back of main queue
+		// Not accessed recently: evict
 		if ent.freq == 0 {
-			// Evict and add to ghost queue
 			delete(c.items, ent.key)
-			c.addToGhost(ent.key)
+			// Note: Don't add to ghost - item was already added when evicted from Small
+			// Only Small queue evictions go to ghost
 			return
 		}
+
+		// Accessed recently: lazy promotion (FIFO-Reinsertion / Second Chance)
+		// Move to back of Main queue and decrement frequency
 		ent.freq--
 		ent.element = c.main.PushBack(ent)
 	}
 }
 
-// addToGhost adds a key to the ghost queue for frequency tracking.
+// addToGhost adds a key to the ghost queue for tracking.
+// Ghost queue holds only keys (no values) of evicted items from Small queue.
 func (c *s3fifo[K, V]) addToGhost(key K) {
-	// Evict from ghost if at capacity
+	// Evict oldest ghost entry if at capacity
 	if c.ghost.Len() >= c.ghostCap {
 		elem := c.ghost.Front()
-		ghostKey, ok := elem.Value.(K)
-		if ok {
+		if ghostKey, ok := elem.Value.(K); ok {
 			c.ghost.Remove(elem)
 			delete(c.ghostKeys, ghostKey)
 		} else {
@@ -221,7 +251,7 @@ func (c *s3fifo[K, V]) addToGhost(key K) {
 		}
 	}
 
-	// Add to ghost queue
+	// Add key to ghost queue
 	elem := c.ghost.PushBack(key)
 	c.ghostKeys[key] = elem
 }

@@ -1,6 +1,8 @@
 package bdcache
 
 import (
+	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -288,5 +290,188 @@ func BenchmarkS3FIFO_Mixed(b *testing.B) {
 		} else {
 			cache.get(i % 10000)
 		}
+	}
+}
+
+// Test to understand S3-FIFO behavior with one-hit wonders
+func TestS3FIFOBehavior(t *testing.T) {
+	ctx := context.Background()
+	cache, err := New[int, int](ctx, WithMemorySize(100))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get internal s3fifo structure
+	s3fifo := cache.memory
+
+	fmt.Println("\n=== S3-FIFO Capacity Configuration ===")
+	fmt.Printf("Total capacity: %d\n", s3fifo.capacity)
+	fmt.Printf("Small capacity: %d (%.0f%%)\n", s3fifo.smallCap, float64(s3fifo.smallCap)/float64(s3fifo.capacity)*100)
+	fmt.Printf("Main capacity: %d (%.0f%%)\n", s3fifo.mainCap, float64(s3fifo.mainCap)/float64(s3fifo.capacity)*100)
+
+	// Phase 1: Insert hot items that will be accessed multiple times
+	fmt.Println("\n=== Phase 1: Insert 50 hot items (will be accessed again) ===")
+	for i := 0; i < 50; i++ {
+		_ = cache.Set(ctx, i, i, 0)
+	}
+	fmt.Printf("After insertion: Small=%d, Main=%d, Total=%d\n",
+		s3fifo.small.Len(), s3fifo.main.Len(), len(s3fifo.items))
+
+	// Phase 2: Access hot items once (should promote some to Main)
+	fmt.Println("\n=== Phase 2: Access hot items (should promote to Main) ===")
+	for i := 0; i < 50; i++ {
+		_, _, _ = cache.Get(ctx, i)
+	}
+	fmt.Printf("After first access: Small=%d, Main=%d, Total=%d\n",
+		s3fifo.small.Len(), s3fifo.main.Len(), len(s3fifo.items))
+
+	// Phase 3: Insert one-hit wonders (should stay in Small and be evicted quickly)
+	fmt.Println("\n=== Phase 3: Insert 60 one-hit wonders ===")
+	for i := 1000; i < 1060; i++ {
+		_ = cache.Set(ctx, i, i, 0)
+	}
+	fmt.Printf("After one-hit wonders: Small=%d, Main=%d, Total=%d\n",
+		s3fifo.small.Len(), s3fifo.main.Len(), len(s3fifo.items))
+
+	// Phase 4: Check if hot items are still in cache
+	fmt.Println("\n=== Phase 4: Check if hot items survived ===")
+	hotItemsFound := 0
+	for i := 0; i < 50; i++ {
+		if _, found, _ := cache.Get(ctx, i); found {
+			hotItemsFound++
+		}
+	}
+	fmt.Printf("Hot items still in cache: %d/50\n", hotItemsFound)
+	fmt.Printf("Final state: Small=%d, Main=%d, Total=%d\n",
+		s3fifo.small.Len(), s3fifo.main.Len(), len(s3fifo.items))
+
+	// Expected behavior:
+	// - Hot items should mostly be in Main queue after first access
+	// - One-hit wonders should fill Small queue and be evicted from Small
+	// - Hot items in Main should survive
+	if hotItemsFound < 40 {
+		t.Errorf("Expected most hot items to survive, got %d/50", hotItemsFound)
+	}
+}
+
+// Test eviction order
+func TestS3FIFOEvictionOrder(t *testing.T) {
+	ctx := context.Background()
+	cache, err := New[int, int](ctx, WithMemorySize(10))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s3fifo := cache.memory
+	fmt.Println("\n=== Testing Eviction Order ===")
+	fmt.Printf("Cache capacity: %d (Small=%d, Main=%d)\n",
+		s3fifo.capacity, s3fifo.smallCap, s3fifo.mainCap)
+
+	// Fill cache with items
+	for i := 0; i < 10; i++ {
+		_ = cache.Set(ctx, i, i, 0)
+		fmt.Printf("Inserted %d: Small=%d, Main=%d\n", i, s3fifo.small.Len(), s3fifo.main.Len())
+	}
+
+	// Access first 5 items (should promote them)
+	fmt.Println("\nAccessing items 0-4 (should promote to Main):")
+	for i := 0; i < 5; i++ {
+		_, _, _ = cache.Get(ctx, i)
+		fmt.Printf("Accessed %d: Small=%d, Main=%d\n", i, s3fifo.small.Len(), s3fifo.main.Len())
+	}
+
+	// Insert new items (should evict from Small, not Main)
+	fmt.Println("\nInserting new items 100-104:")
+	for i := 100; i < 105; i++ {
+		_ = cache.Set(ctx, i, i, 0)
+		fmt.Printf("Inserted %d: Small=%d, Main=%d\n", i, s3fifo.small.Len(), s3fifo.main.Len())
+	}
+
+	// Check which items survived
+	fmt.Println("\nChecking which items are still in cache:")
+	for i := 0; i < 10; i++ {
+		if _, found, _ := cache.Get(ctx, i); found {
+			fmt.Printf("  Item %d: FOUND\n", i)
+		} else {
+			fmt.Printf("  Item %d: EVICTED\n", i)
+		}
+	}
+}
+
+// Test to verify S3-FIFO is actually different from LRU behavior
+func TestS3FIFODetailed(t *testing.T) {
+	ctx := context.Background()
+	cache, err := New[int, int](ctx, WithMemorySize(10))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s3fifo := cache.memory
+
+	fmt.Println("\n=== Detailed S3-FIFO Test ===")
+	fmt.Printf("Capacity: %d (Small=%d, Main=%d)\n\n", s3fifo.capacity, s3fifo.smallCap, s3fifo.mainCap)
+
+	// Step 1: Insert items 1-10 into cache
+	fmt.Println("Step 1: Insert items 1-10")
+	for i := 1; i <= 10; i++ {
+		_ = cache.Set(ctx, i, i*100, 0)
+	}
+	fmt.Printf("  Small=%d, Main=%d, Total=%d\n", s3fifo.small.Len(), s3fifo.main.Len(), len(s3fifo.items))
+
+	// Step 2: Access items 1-5 (should mark them with freq > 0)
+	fmt.Println("\nStep 2: Access items 1-5 (mark as hot)")
+	for i := 1; i <= 5; i++ {
+		_, _, _ = cache.Get(ctx, i)
+	}
+	fmt.Printf("  Small=%d, Main=%d, Total=%d\n", s3fifo.small.Len(), s3fifo.main.Len(), len(s3fifo.items))
+
+	// Step 3: Insert one-hit wonders 100-104 (should evict unaccessed items 6-10, promote accessed 1-5)
+	fmt.Println("\nStep 3: Insert one-hit wonders 100-104")
+	for i := 100; i < 105; i++ {
+		_ = cache.Set(ctx, i, i*100, 0)
+		fmt.Printf("  Inserted %d: Small=%d, Main=%d\n", i, s3fifo.small.Len(), s3fifo.main.Len())
+	}
+
+	// Step 4: Check which items survived
+	fmt.Println("\nStep 4: Check which items survived")
+	fmt.Println("  Items 1-5 (accessed, should be in Main):")
+	for i := 1; i <= 5; i++ {
+		if _, found, _ := cache.Get(ctx, i); found {
+			fmt.Printf("    Item %d: ✓ FOUND\n", i)
+		} else {
+			fmt.Printf("    Item %d: ✗ EVICTED (BAD - was accessed!)\n", i)
+		}
+	}
+
+	fmt.Println("  Items 6-10 (not accessed, should be evicted):")
+	for i := 6; i <= 10; i++ {
+		if _, found, _ := cache.Get(ctx, i); found {
+			fmt.Printf("    Item %d: ✗ FOUND (BAD - should have been evicted!)\n", i)
+		} else {
+			fmt.Printf("    Item %d: ✓ EVICTED\n", i)
+		}
+	}
+
+	fmt.Println("  One-hit wonders 100-104 (should be in Small):")
+	for i := 100; i < 105; i++ {
+		if _, found, _ := cache.Get(ctx, i); found {
+			fmt.Printf("    Item %d: ✓ FOUND\n", i)
+		} else {
+			fmt.Printf("    Item %d: ✗ EVICTED\n", i)
+		}
+	}
+
+	fmt.Printf("\nFinal state: Small=%d, Main=%d, Total=%d\n", s3fifo.small.Len(), s3fifo.main.Len(), len(s3fifo.items))
+
+	// Verify expected behavior
+	hotSurvived := 0
+	for i := 1; i <= 5; i++ {
+		if _, found, _ := cache.Get(ctx, i); found {
+			hotSurvived++
+		}
+	}
+
+	if hotSurvived != 5 {
+		t.Errorf("Expected all 5 hot items to survive, got %d", hotSurvived)
 	}
 }
