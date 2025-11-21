@@ -82,18 +82,9 @@ func (d *datastorePersist[K, V]) Load(ctx context.Context, key K) (V, time.Time,
 		return zero, time.Time{}, false, fmt.Errorf("datastore get: %w", err)
 	}
 
-	// Check expiration
+	// Check expiration - return miss but don't delete
+	// Cleanup is handled by native Datastore TTL or periodic Cleanup() calls
 	if !entry.Expiry.IsZero() && time.Now().After(entry.Expiry) {
-		// Delete expired entry asynchronously with timeout
-		// Note: Using context.Background() intentionally - cleanup should continue even if parent context is cancelled
-		go func(_ context.Context) {
-			//nolint:contextcheck // Using Background intentionally for independent cleanup goroutine
-			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := d.client.Delete(cleanupCtx, dsKey); err != nil {
-				slog.Debug("failed to delete expired entry", "error", err)
-			}
-		}(ctx)
 		return zero, time.Time{}, false, nil
 	}
 
@@ -187,17 +178,8 @@ func (d *datastorePersist[K, V]) LoadRecent(ctx context.Context, limit int) (<-c
 			default:
 			}
 
-			// Clean up expired entries asynchronously with timeout
+			// Skip expired entries - cleanup is handled by native TTL or periodic Cleanup() calls
 			if !entry.Expiry.IsZero() && now.After(entry.Expiry) {
-				// Note: Using context.Background() intentionally - cleanup should continue even if parent context is cancelled
-				go func(_ context.Context, key *datastore.Key) {
-					//nolint:contextcheck // Using Background intentionally for independent cleanup goroutine
-					cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					defer cancel()
-					if err := d.client.Delete(cleanupCtx, key); err != nil {
-						slog.Debug("failed to delete expired entry", "error", err)
-					}
-				}(ctx, dsKey)
 				expired++
 				continue
 			}
@@ -248,6 +230,37 @@ func (d *datastorePersist[K, V]) LoadRecent(ctx context.Context, limit int) (<-c
 // LoadAll streams all entries from Datastore (no limit).
 func (d *datastorePersist[K, V]) LoadAll(ctx context.Context) (<-chan Entry[K, V], <-chan error) {
 	return d.LoadRecent(ctx, 0)
+}
+
+// Cleanup removes expired entries from Datastore.
+// maxAge specifies how old entries must be (based on expiry field) before deletion.
+// If native Datastore TTL is properly configured, this will find no entries.
+func (d *datastorePersist[K, V]) Cleanup(ctx context.Context, maxAge time.Duration) (int, error) {
+	cutoff := time.Now().Add(-maxAge)
+
+	// Query for entries with expiry before cutoff
+	// This finds entries that should have expired based on maxAge
+	query := datastore.NewQuery(d.kind).
+		Filter("expiry >", time.Time{}).
+		Filter("expiry <", cutoff).
+		KeysOnly()
+
+	keys, err := d.client.GetAll(ctx, query, nil)
+	if err != nil {
+		return 0, fmt.Errorf("query expired entries: %w", err)
+	}
+
+	if len(keys) == 0 {
+		return 0, nil
+	}
+
+	// Batch delete expired entries
+	if err := d.client.DeleteMulti(ctx, keys); err != nil {
+		return 0, fmt.Errorf("delete expired entries: %w", err)
+	}
+
+	slog.Info("cleaned up expired entries", "count", len(keys), "kind", d.kind)
+	return len(keys), nil
 }
 
 // Close releases Datastore client resources.

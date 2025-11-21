@@ -1,6 +1,5 @@
 package benchmarks
 
-
 import (
 	"context"
 	"fmt"

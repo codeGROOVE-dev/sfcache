@@ -31,6 +31,12 @@ val, found, err := cache.Get(ctx, "answer")
 
 // With smart persistence (local files for dev, Google Cloud Datastore for Cloud Run)
 cache, err := bdcache.New[string, User](ctx, bdcache.WithBestStore("myapp"))
+
+// With Cloud Datastore persistence and automatic cleanup
+cache, err := bdcache.New[string, User](ctx,
+    bdcache.WithCloudDatastore("myapp"),
+    bdcache.WithCleanup(24*time.Hour), // Cleanup entries older than 24h
+)
 ```
 
 ## Features
@@ -91,6 +97,41 @@ BenchmarkCache_Get_PersistMemoryHit-16    85M ops/sec    11.8 ns/op       0 B/op
 BenchmarkCache_Get_PersistDiskRead-16     73K ops/sec    13.8 µs/op    7921 B/op   178 allocs
 BenchmarkCache_Set_WithPersistence-16      9K ops/sec   112.3 µs/op    2383 B/op    36 allocs
 ```
+
+## Cloud Datastore TTL Setup
+
+When using Google Cloud Datastore persistence, configure native TTL policies for automatic expiration:
+
+### One-time Setup (per database)
+
+```bash
+# Enable TTL on the 'expiry' field for CacheEntry kind
+gcloud firestore fields ttls update expiry \
+  --collection-group=CacheEntry \
+  --enable-ttl \
+  --database=YOUR_CACHE_ID
+```
+
+**Important:**
+- Replace `YOUR_CACHE_ID` with your cache ID (passed to `WithCloudDatastore()`)
+- This is a one-time setup per database
+- Datastore automatically deletes expired entries within 24 hours
+- No indexing needed on the expiry field (prevents hotspots)
+
+### Best Practices
+
+1. **Use Native TTL**: Let Datastore handle expiration automatically
+2. **Add Cleanup Fallback**: Use `WithCleanup()` as a safety net:
+   ```go
+   cache, err := bdcache.New[string, User](ctx,
+       bdcache.WithCloudDatastore("myapp"),
+       bdcache.WithCleanup(24*time.Hour), // Safety net for orphaned data
+   )
+   ```
+3. **Set Cleanup MaxAge**: Should match your longest TTL value
+4. **Monitor Costs**: TTL deletions count toward entity delete operations
+
+If native TTL is properly configured, `WithCleanup()` will find no entries (fast no-op).
 
 ## License
 

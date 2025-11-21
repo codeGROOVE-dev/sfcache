@@ -7,11 +7,13 @@ import (
 
 // Options configures a Cache instance.
 type Options struct {
-	CacheID      string
-	MemorySize   int
-	DefaultTTL   time.Duration
-	WarmupLimit  int
-	UseDatastore bool
+	CacheID        string
+	MemorySize     int
+	DefaultTTL     time.Duration
+	WarmupLimit    int
+	UseDatastore   bool
+	CleanupEnabled bool
+	CleanupMaxAge  time.Duration
 }
 
 // Option is a functional option for configuring a Cache.
@@ -55,11 +57,7 @@ func WithCloudDatastore(cacheID string) Option {
 func WithBestStore(cacheID string) Option {
 	return func(o *Options) {
 		o.CacheID = cacheID
-		if os.Getenv("K_SERVICE") != "" {
-			o.UseDatastore = true
-		} else {
-			o.UseDatastore = false
-		}
+		o.UseDatastore = os.Getenv("K_SERVICE") != ""
 	}
 }
 
@@ -71,13 +69,20 @@ func WithWarmup(n int) Option {
 	}
 }
 
+// WithCleanup enables background cleanup of expired entries at startup.
+// maxAge should be set to your maximum TTL value - entries older than this are deleted.
+// This is a safety net for expired data and works alongside native Datastore TTL policies.
+// If native TTL is properly configured, this cleanup will be fast (no-op).
+func WithCleanup(maxAge time.Duration) Option {
+	return func(o *Options) {
+		o.CleanupEnabled = true
+		o.CleanupMaxAge = maxAge
+	}
+}
+
 // defaultOptions returns the default configuration (memory-only).
 func defaultOptions() *Options {
 	return &Options{
-		MemorySize:   10000,
-		DefaultTTL:   0,
-		CacheID:      "",
-		UseDatastore: false,
-		WarmupLimit:  0,
+		MemorySize: 10000,
 	}
 }

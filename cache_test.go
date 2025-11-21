@@ -751,6 +751,10 @@ func (e *errorPersist[K, V]) ValidateKey(key K) error {
 	return nil // Allow all keys for test
 }
 
+func (e *errorPersist[K, V]) Cleanup(ctx context.Context, maxAge time.Duration) (int, error) {
+	return 0, context.DeadlineExceeded
+}
+
 func BenchmarkCache_Set_WithPersistence(b *testing.B) {
 	ctx := context.Background()
 	cacheID := "bench-persist-" + time.Now().Format("20060102150405")

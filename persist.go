@@ -31,6 +31,11 @@ type PersistenceLayer[K comparable, V any] interface {
 	// Equivalent to LoadRecent(ctx, 0).
 	LoadAll(ctx context.Context) (<-chan Entry[K, V], <-chan error)
 
+	// Cleanup removes expired entries from persistent storage.
+	// maxAge specifies how old entries must be before deletion.
+	// Returns the number of entries deleted and any error.
+	Cleanup(ctx context.Context, maxAge time.Duration) (int, error)
+
 	// Close releases any resources held by the persistence layer.
 	Close() error
 }

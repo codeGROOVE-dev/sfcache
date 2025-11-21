@@ -342,6 +342,72 @@ func (f *filePersist[K, V]) LoadAll(ctx context.Context) (<-chan Entry[K, V], <-
 	return f.LoadRecent(ctx, 0)
 }
 
+// Cleanup removes expired entries from file storage.
+// Walks through all cache files and deletes those with expired timestamps.
+func (f *filePersist[K, V]) Cleanup(ctx context.Context, maxAge time.Duration) (int, error) {
+	cutoff := time.Now().Add(-maxAge)
+	deleted := 0
+
+	entries, err := os.ReadDir(f.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("read cache directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		// Check context cancellation
+		select {
+		case <-ctx.Done():
+			return deleted, ctx.Err()
+		default:
+		}
+
+		if entry.IsDir() {
+			continue
+		}
+
+		filename := filepath.Join(f.dir, entry.Name())
+
+		// Read and check expiry
+		file, err := os.Open(filename)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			slog.Debug("failed to open file for cleanup", "file", filename, "error", err)
+			continue
+		}
+
+		var entry Entry[K, V]
+		decoder := gob.NewDecoder(file)
+		err = decoder.Decode(&entry)
+		if closeErr := file.Close(); closeErr != nil {
+			slog.Debug("failed to close file during cleanup", "file", filename, "error", closeErr)
+		}
+
+		if err != nil {
+			slog.Debug("failed to decode file for cleanup", "file", filename, "error", err)
+			continue
+		}
+
+		// Delete if expired
+		if !entry.Expiry.IsZero() && entry.Expiry.Before(cutoff) {
+			if err := os.Remove(filename); err != nil && !os.IsNotExist(err) {
+				slog.Debug("failed to remove expired file", "file", filename, "error", err)
+				continue
+			}
+			deleted++
+		}
+	}
+
+	if deleted > 0 {
+		slog.Info("cleaned up expired file entries", "count", deleted, "dir", f.dir)
+	}
+	return deleted, nil
+}
+
 // Close cleans up resources.
 func (*filePersist[K, V]) Close() error {
 	// No resources to clean up for file-based persistence

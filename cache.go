@@ -50,6 +50,20 @@ func New[K comparable, V any](ctx context.Context, options ...Option) (*Cache[K,
 			}
 		}
 
+		// Run background cleanup if configured
+		if cache.persist != nil && opts.CleanupEnabled {
+			go func() {
+				deleted, err := cache.persist.Cleanup(ctx, opts.CleanupMaxAge)
+				if err != nil {
+					slog.Warn("error during cache cleanup", "error", err)
+					return
+				}
+				if deleted > 0 {
+					slog.Info("cache cleanup complete", "deleted", deleted)
+				}
+			}()
+		}
+
 		// Warm up cache from persistence if configured
 		if cache.persist != nil && opts.WarmupLimit > 0 {
 			go cache.warmup(ctx)
@@ -85,22 +99,22 @@ func (c *Cache[K, V]) warmup(ctx context.Context) {
 
 // Get retrieves a value from the cache.
 // It first checks the memory cache, then falls back to persistence if available.
-func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, found bool, err error) {
+func (c *Cache[K, V]) Get(ctx context.Context, key K) (V, bool, error) {
 	// Check memory first
 	if val, ok := c.memory.get(key); ok {
 		return val, true, nil
 	}
 
+	var zero V
+
 	// If no persistence, return miss
 	if c.persist == nil {
-		var zero V
 		return zero, false, nil
 	}
 
 	// Validate key before accessing persistence (security: prevent path traversal)
 	if err := c.persist.ValidateKey(key); err != nil {
 		slog.Warn("invalid key for persistence", "error", err, "key", key)
-		var zero V
 		return zero, false, nil
 	}
 
@@ -109,12 +123,10 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, found bool, err 
 	if err != nil {
 		// Log error but don't fail - graceful degradation
 		slog.Warn("persistence load failed", "error", err, "key", key)
-		var zero V
 		return zero, false, nil
 	}
 
 	if !found {
-		var zero V
 		return zero, false, nil
 	}
 
