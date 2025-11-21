@@ -47,8 +47,8 @@ func TestCache_OnDemandLoadFromDisk(t *testing.T) {
 	}()
 
 	// Verify memory is empty (no warmup)
-	if cache2.memory.len() != 0 {
-		t.Errorf("cache2 memory length without warmup = %d; want 0", cache2.memory.len())
+	if cache2.memory.memoryLen() != 0 {
+		t.Errorf("cache2 memory length without warmup = %d; want 0", cache2.memory.memoryLen())
 	}
 
 	// First Get - should load from disk on-demand
@@ -64,10 +64,10 @@ func TestCache_OnDemandLoadFromDisk(t *testing.T) {
 	}
 
 	// Verify it's now in memory (promoted)
-	if cache2.memory.len() != 1 {
-		t.Errorf("cache2 memory length after Get = %d; want 1", cache2.memory.len())
+	if cache2.memory.memoryLen() != 1 {
+		t.Errorf("cache2 memory length after Get = %d; want 1", cache2.memory.memoryLen())
 	}
-	if _, memFound := cache2.memory.get("key1"); !memFound {
+	if _, memFound := cache2.memory.getFromMemory("key1"); !memFound {
 		t.Error("key1 should be in memory after on-demand load")
 	}
 
@@ -96,8 +96,8 @@ func TestCache_OnDemandLoadFromDisk(t *testing.T) {
 	}
 
 	// Now memory should have 2 items
-	if cache2.memory.len() != 2 {
-		t.Errorf("cache2 memory length = %d; want 2", cache2.memory.len())
+	if cache2.memory.memoryLen() != 2 {
+		t.Errorf("cache2 memory length = %d; want 2", cache2.memory.memoryLen())
 	}
 }
 
@@ -139,8 +139,8 @@ func TestCache_DiskToMemoryPromotion(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Verify items loaded into memory from disk via warmup
-	if cache2.memory.len() != 2 {
-		t.Errorf("cache2 memory length after warmup = %d; want 2", cache2.memory.len())
+	if cache2.memory.memoryLen() != 2 {
+		t.Errorf("cache2 memory length after warmup = %d; want 2", cache2.memory.memoryLen())
 	}
 
 	// Get should hit memory (already warmed up)
@@ -477,7 +477,7 @@ func TestCache_ComprehensiveDiskToMemoryPath(t *testing.T) {
 	}
 
 	// Verify it's now in memory (promoted)
-	if _, memFound := cache3.memory.get("key1"); !memFound {
+	if _, memFound := cache3.memory.getFromMemory("key1"); !memFound {
 		t.Error("key1 should be in memory after Get from disk")
 	}
 

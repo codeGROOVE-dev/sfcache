@@ -75,9 +75,9 @@ func newS3FIFO[K comparable, V any](capacity int) *s3fifo[K, V] {
 	}
 }
 
-// get retrieves a value from the cache.
+// getFromMemory retrieves a value from the in-memory cache.
 // On hit, increments frequency counter (used during eviction).
-func (c *s3fifo[K, V]) get(key K) (V, bool) {
+func (c *s3fifo[K, V]) getFromMemory(key K) (V, bool) {
 	c.mu.RLock()
 	ent, ok := c.items[key]
 	if !ok {
@@ -105,8 +105,8 @@ func (c *s3fifo[K, V]) get(key K) (V, bool) {
 	return val, true
 }
 
-// set adds or updates a value in the cache.
-func (c *s3fifo[K, V]) set(key K, value V, expiry time.Time) {
+// setToMemory adds or updates a value in the in-memory cache.
+func (c *s3fifo[K, V]) setToMemory(key K, value V, expiry time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -151,8 +151,8 @@ func (c *s3fifo[K, V]) set(key K, value V, expiry time.Time) {
 	c.items[key] = ent
 }
 
-// delete removes a value from the cache.
-func (c *s3fifo[K, V]) delete(key K) {
+// deleteFromMemory removes a value from the in-memory cache.
+func (c *s3fifo[K, V]) deleteFromMemory(key K) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -262,15 +262,15 @@ func (c *s3fifo[K, V]) addToGhost(key K) {
 	c.ghostKeys[key] = elem
 }
 
-// len returns the number of items in the cache.
-func (c *s3fifo[K, V]) len() int {
+// memoryLen returns the number of items in the in-memory cache.
+func (c *s3fifo[K, V]) memoryLen() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.items)
 }
 
-// cleanup removes expired entries from the cache.
-func (c *s3fifo[K, V]) cleanup() int {
+// cleanupMemory removes expired entries from the in-memory cache.
+func (c *s3fifo[K, V]) cleanupMemory() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

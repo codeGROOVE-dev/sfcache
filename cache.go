@@ -79,7 +79,7 @@ func (c *Cache[K, V]) warmup(ctx context.Context) {
 
 	loaded := 0
 	for entry := range entryCh {
-		c.memory.set(entry.Key, entry.Value, entry.Expiry)
+		c.memory.setToMemory(entry.Key, entry.Value, entry.Expiry)
 		loaded++
 	}
 
@@ -99,9 +99,11 @@ func (c *Cache[K, V]) warmup(ctx context.Context) {
 
 // Get retrieves a value from the cache.
 // It first checks the memory cache, then falls back to persistence if available.
+//
+//nolint:gocritic // unnamedResult - public API signature is intentionally clear without named returns
 func (c *Cache[K, V]) Get(ctx context.Context, key K) (V, bool, error) {
 	// Check memory first
-	if val, ok := c.memory.get(key); ok {
+	if val, ok := c.memory.getFromMemory(key); ok {
 		return val, true, nil
 	}
 
@@ -131,7 +133,7 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (V, bool, error) {
 	}
 
 	// Add to memory cache for future hits
-	c.memory.set(key, val, expiry)
+	c.memory.setToMemory(key, val, expiry)
 
 	return val, true, nil
 }
@@ -157,7 +159,7 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, ttl time.Duration
 	}
 
 	// ALWAYS update memory first - reliability guarantee
-	c.memory.set(key, value, expiry)
+	c.memory.setToMemory(key, value, expiry)
 
 	// Update persistence if available
 	if c.persist != nil {
@@ -170,9 +172,11 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, ttl time.Duration
 }
 
 // Delete removes a value from the cache.
+//
+//nolint:revive // confusing-naming - standard cache operation
 func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
 	// Remove from memory
-	c.memory.delete(key)
+	c.memory.deleteFromMemory(key)
 
 	// Remove from persistence if available
 	if c.persist != nil {
@@ -190,16 +194,20 @@ func (c *Cache[K, V]) Delete(ctx context.Context, key K) {
 
 // Cleanup removes expired entries from the cache.
 // Returns the number of entries removed.
+//
+//nolint:revive // confusing-naming - standard cache operation
 func (c *Cache[K, V]) Cleanup() int {
-	return c.memory.cleanup()
+	return c.memory.cleanupMemory()
 }
 
 // Len returns the number of items in the memory cache.
 func (c *Cache[K, V]) Len() int {
-	return c.memory.len()
+	return c.memory.memoryLen()
 }
 
 // Close releases resources held by the cache.
+//
+//nolint:revive // confusing-naming - standard cache operation
 func (c *Cache[K, V]) Close() error {
 	if c.persist != nil {
 		if err := c.persist.Close(); err != nil {

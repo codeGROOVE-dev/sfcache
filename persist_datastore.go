@@ -70,7 +70,9 @@ func (d *datastorePersist[K, V]) makeKey(key K) *datastore.Key {
 }
 
 // Load retrieves a value from Datastore.
-func (d *datastorePersist[K, V]) Load(ctx context.Context, key K) (V, time.Time, bool, error) {
+//
+//nolint:revive // function-result-limit - required by PersistenceLayer interface
+func (d *datastorePersist[K, V]) Load(ctx context.Context, key K) (value V, expiry time.Time, found bool, err error) {
 	var zero V
 	dsKey := d.makeKey(key)
 
@@ -89,15 +91,14 @@ func (d *datastorePersist[K, V]) Load(ctx context.Context, key K) (V, time.Time,
 	}
 
 	// Decode from base64
-	valueBytes, err := base64.StdEncoding.DecodeString(entry.Value)
-	if err != nil {
-		return zero, time.Time{}, false, fmt.Errorf("decode base64: %w", err)
+	valueBytes, decodeErr := base64.StdEncoding.DecodeString(entry.Value)
+	if decodeErr != nil {
+		return zero, time.Time{}, false, fmt.Errorf("decode base64: %w", decodeErr)
 	}
 
 	// Decode value from JSON
-	var value V
-	if err := json.Unmarshal(valueBytes, &value); err != nil {
-		return zero, time.Time{}, false, fmt.Errorf("unmarshal value: %w", err)
+	if unmarshalErr := json.Unmarshal(valueBytes, &value); unmarshalErr != nil {
+		return zero, time.Time{}, false, fmt.Errorf("unmarshal value: %w", unmarshalErr)
 	}
 
 	return value, entry.Expiry, true, nil
@@ -139,7 +140,7 @@ func (d *datastorePersist[K, V]) Delete(ctx context.Context, key K) error {
 }
 
 // LoadRecent streams entries from Datastore, returning up to 'limit' most recently updated entries.
-func (d *datastorePersist[K, V]) LoadRecent(ctx context.Context, limit int) (<-chan Entry[K, V], <-chan error) {
+func (d *datastorePersist[K, V]) LoadRecent(ctx context.Context, limit int) (entries <-chan Entry[K, V], errs <-chan error) {
 	entryCh := make(chan Entry[K, V], 100)
 	errCh := make(chan error, 1)
 
@@ -228,7 +229,7 @@ func (d *datastorePersist[K, V]) LoadRecent(ctx context.Context, limit int) (<-c
 }
 
 // LoadAll streams all entries from Datastore (no limit).
-func (d *datastorePersist[K, V]) LoadAll(ctx context.Context) (<-chan Entry[K, V], <-chan error) {
+func (d *datastorePersist[K, V]) LoadAll(ctx context.Context) (entries <-chan Entry[K, V], errs <-chan error) {
 	return d.LoadRecent(ctx, 0)
 }
 

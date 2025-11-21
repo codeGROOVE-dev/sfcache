@@ -18,13 +18,13 @@ import (
 const maxKeyLength = 127 // Maximum key length to avoid filesystem constraints
 
 var (
-	// Pool for bufio.Writer to reduce allocations
+	// Pool for bufio.Writer to reduce allocations.
 	writerPool = sync.Pool{
 		New: func() any {
 			return bufio.NewWriterSize(nil, 4096)
 		},
 	}
-	// Pool for bufio.Reader to reduce allocations
+	// Pool for bufio.Reader to reduce allocations.
 	readerPool = sync.Pool{
 		New: func() any {
 			return bufio.NewReaderSize(nil, 4096)
@@ -33,14 +33,18 @@ var (
 )
 
 // filePersist implements PersistenceLayer using local files with gob encoding.
+//
+//nolint:govet // fieldalignment - current layout groups related fields logically (mutex with map it protects)
 type filePersist[K comparable, V any] struct {
-	dir         string
 	subdirsMu   sync.RWMutex
+	dir         string
 	subdirsMade map[string]bool // Cache of created subdirectories
 }
 
 // ValidateKey checks if a key is valid for file persistence.
 // Keys must be alphanumeric, dash, underscore, period, or colon, and max 127 characters.
+//
+//nolint:revive // confusing-naming - implements PersistenceLayer interface
 func (*filePersist[K, V]) ValidateKey(key K) error {
 	keyStr := fmt.Sprintf("%v", key)
 	if len(keyStr) > maxKeyLength {
@@ -66,7 +70,7 @@ func newFilePersist[K comparable, V any](cacheID string) (*filePersist[K, V], er
 	}
 	// Check for path traversal attempts
 	if strings.Contains(cacheID, "..") || strings.Contains(cacheID, "/") || strings.Contains(cacheID, "\\") {
-		return nil, fmt.Errorf("invalid cacheID: contains path separators or traversal sequences")
+		return nil, errors.New("invalid cacheID: contains path separators or traversal sequences")
 	}
 	// Check for null bytes (security)
 	if strings.Contains(cacheID, "\x00") {
@@ -110,7 +114,9 @@ func (*filePersist[K, V]) keyToFilename(key K) string {
 }
 
 // Load retrieves a value from a file.
-func (f *filePersist[K, V]) Load(ctx context.Context, key K) (V, time.Time, bool, error) {
+//
+//nolint:revive // function-result-limit - required by PersistenceLayer interface
+func (f *filePersist[K, V]) Load(ctx context.Context, key K) (value V, expiry time.Time, found bool, err error) {
 	var zero V
 	filename := filepath.Join(f.dir, f.keyToFilename(key))
 
@@ -128,7 +134,10 @@ func (f *filePersist[K, V]) Load(ctx context.Context, key K) (V, time.Time, bool
 	}()
 
 	// Get reader from pool and reset it for this file
-	reader := readerPool.Get().(*bufio.Reader)
+	reader, ok := readerPool.Get().(*bufio.Reader)
+	if !ok {
+		reader = bufio.NewReaderSize(file, 4096)
+	}
 	reader.Reset(file)
 	defer readerPool.Put(reader)
 
@@ -154,6 +163,8 @@ func (f *filePersist[K, V]) Load(ctx context.Context, key K) (V, time.Time, bool
 }
 
 // Store saves a value to a file.
+//
+//nolint:revive // confusing-naming - implements PersistenceLayer interface
 func (f *filePersist[K, V]) Store(ctx context.Context, key K, value V, expiry time.Time) error {
 	filename := filepath.Join(f.dir, f.keyToFilename(key))
 	subdir := filepath.Dir(filename)
@@ -189,7 +200,10 @@ func (f *filePersist[K, V]) Store(ctx context.Context, key K, value V, expiry ti
 	}
 
 	// Get writer from pool and reset it for this file
-	writer := writerPool.Get().(*bufio.Writer)
+	writer, ok := writerPool.Get().(*bufio.Writer)
+	if !ok {
+		writer = bufio.NewWriterSize(file, 4096)
+	}
 	writer.Reset(file)
 
 	enc := gob.NewEncoder(writer)
@@ -229,6 +243,8 @@ func (f *filePersist[K, V]) Store(ctx context.Context, key K, value V, expiry ti
 }
 
 // Delete removes a file.
+//
+//nolint:revive // confusing-naming - implements PersistenceLayer interface
 func (f *filePersist[K, V]) Delete(ctx context.Context, key K) error {
 	filename := filepath.Join(f.dir, f.keyToFilename(key))
 	err := os.Remove(filename)
@@ -239,6 +255,8 @@ func (f *filePersist[K, V]) Delete(ctx context.Context, key K) error {
 }
 
 // LoadRecent streams entries from files, returning up to 'limit' most recently updated entries.
+//
+//nolint:revive,gocritic // confusing-naming - implements PersistenceLayer interface; unnamedResult - channel returns are self-documenting
 func (f *filePersist[K, V]) LoadRecent(ctx context.Context, limit int) (<-chan Entry[K, V], <-chan error) {
 	entryCh := make(chan Entry[K, V], 100)
 	errCh := make(chan error, 1)
@@ -278,7 +296,10 @@ func (f *filePersist[K, V]) LoadRecent(ctx context.Context, limit int) (<-chan E
 			}
 
 			// Get reader from pool and reset it for this file
-			reader := readerPool.Get().(*bufio.Reader)
+			reader, ok := readerPool.Get().(*bufio.Reader)
+			if !ok {
+				reader = bufio.NewReaderSize(file, 4096)
+			}
 			reader.Reset(file)
 
 			var e Entry[K, V]
@@ -338,12 +359,16 @@ func (f *filePersist[K, V]) LoadRecent(ctx context.Context, limit int) (<-chan E
 }
 
 // LoadAll streams all entries from files (no limit).
+//
+//nolint:revive,gocritic // confusing-naming - implements PersistenceLayer interface; unnamedResult - channel returns are self-documenting
 func (f *filePersist[K, V]) LoadAll(ctx context.Context) (<-chan Entry[K, V], <-chan error) {
 	return f.LoadRecent(ctx, 0)
 }
 
 // Cleanup removes expired entries from file storage.
 // Walks through all cache files and deletes those with expired timestamps.
+//
+//nolint:revive // confusing-naming - implements PersistenceLayer interface
 func (f *filePersist[K, V]) Cleanup(ctx context.Context, maxAge time.Duration) (int, error) {
 	cutoff := time.Now().Add(-maxAge)
 	deleted := 0
@@ -409,6 +434,8 @@ func (f *filePersist[K, V]) Cleanup(ctx context.Context, maxAge time.Duration) (
 }
 
 // Close cleans up resources.
+//
+//nolint:revive // confusing-naming - implements PersistenceLayer interface
 func (*filePersist[K, V]) Close() error {
 	// No resources to clean up for file-based persistence
 	return nil

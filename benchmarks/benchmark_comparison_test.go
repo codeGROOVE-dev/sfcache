@@ -31,7 +31,7 @@ func generateWorkload(n int) []string {
 	keys := make([]string, n)
 	oneHitIndex := 0
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if i%4 == 0 {
 			// 25% one-hit wonders (cache pollution)
 			idx := oneHitIndex % oneHitWonders
@@ -58,10 +58,12 @@ func BenchmarkHitRate_bdcache(b *testing.B) {
 	workload := generateWorkload(totalOps)
 
 	// Warmup phase - not measured
-	for i := 0; i < 50000; i++ {
+	for i := range 50000 {
 		key := workload[i]
-		if _, found, _ := cache.Get(ctx, key); !found {
-			_ = cache.Set(ctx, key, i, 0)
+		if _, found, err := cache.Get(ctx, key); err == nil && !found {
+			if err := cache.Set(ctx, key, i, 0); err != nil {
+				b.Fatalf("Set failed: %v", err)
+			}
 		}
 	}
 
@@ -70,14 +72,17 @@ func BenchmarkHitRate_bdcache(b *testing.B) {
 	misses := 0
 
 	b.ResetTimer()
+	//nolint:intrange // b.N is dynamic and cannot use range
 	for i := 0; i < b.N; i++ {
 		key := workload[50000+i]
 
-		if _, found, _ := cache.Get(ctx, key); found {
+		if _, found, err := cache.Get(ctx, key); err == nil && found {
 			hits++
 		} else {
 			misses++
-			_ = cache.Set(ctx, key, i, 0)
+			if err := cache.Set(ctx, key, i, 0); err != nil {
+				b.Fatalf("Set failed: %v", err)
+			}
 		}
 	}
 	b.StopTimer()
@@ -98,7 +103,7 @@ func BenchmarkHitRate_LRU(b *testing.B) {
 	workload := generateWorkload(totalOps)
 
 	// Warmup phase - not measured
-	for i := 0; i < 50000; i++ {
+	for i := range 50000 {
 		key := workload[i]
 		if _, found := cache.Get(key); !found {
 			cache.Add(key, i)
@@ -110,6 +115,7 @@ func BenchmarkHitRate_LRU(b *testing.B) {
 	misses := 0
 
 	b.ResetTimer()
+	//nolint:intrange // b.N is dynamic and cannot use range
 	for i := 0; i < b.N; i++ {
 		key := workload[50000+i]
 
@@ -143,7 +149,7 @@ func BenchmarkHitRate_ristretto(b *testing.B) {
 	workload := generateWorkload(totalOps)
 
 	// Warmup phase - not measured
-	for i := 0; i < 50000; i++ {
+	for i := range 50000 {
 		key := workload[i]
 		if _, found := cache.Get(key); !found {
 			cache.Set(key, i, 1)
@@ -156,6 +162,7 @@ func BenchmarkHitRate_ristretto(b *testing.B) {
 	misses := 0
 
 	b.ResetTimer()
+	//nolint:intrange // b.N is dynamic and cannot use range
 	for i := 0; i < b.N; i++ {
 		key := workload[50000+i]
 
@@ -181,13 +188,18 @@ func BenchmarkSpeed_bdcache(b *testing.B) {
 	}
 
 	// Pre-populate
-	for i := 0; i < 1000; i++ {
-		_ = cache.Set(ctx, i, i, 0)
+	for i := range 1000 {
+		if err := cache.Set(ctx, i, i, 0); err != nil {
+			b.Fatalf("Set failed: %v", err)
+		}
 	}
 
 	b.ResetTimer()
+	//nolint:intrange // b.N is dynamic and cannot use range
 	for i := 0; i < b.N; i++ {
-		_, _, _ = cache.Get(ctx, i%1000)
+		if _, _, err := cache.Get(ctx, i%1000); err != nil {
+			b.Fatalf("Get failed: %v", err)
+		}
 	}
 }
 
@@ -199,11 +211,12 @@ func BenchmarkSpeed_LRU(b *testing.B) {
 	}
 
 	// Pre-populate
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		cache.Add(i, i)
 	}
 
 	b.ResetTimer()
+	//nolint:intrange // b.N is dynamic and cannot use range
 	for i := 0; i < b.N; i++ {
 		_, _ = cache.Get(i % 1000)
 	}
@@ -222,12 +235,13 @@ func BenchmarkSpeed_ristretto(b *testing.B) {
 	defer cache.Close()
 
 	// Pre-populate
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		cache.Set(i, i, 1)
 	}
 	cache.Wait() // Ristretto sets are async
 
 	b.ResetTimer()
+	//nolint:intrange // b.N is dynamic and cannot use range
 	for i := 0; i < b.N; i++ {
 		_, _ = cache.Get(i % 1000)
 	}
@@ -240,11 +254,12 @@ func BenchmarkSpeed_otter(b *testing.B) {
 	})
 
 	// Pre-populate
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		cache.Set(i, i)
 	}
 
 	b.ResetTimer()
+	//nolint:intrange // b.N is dynamic and cannot use range
 	for i := 0; i < b.N; i++ {
 		_, _ = cache.GetIfPresent(i % 1000)
 	}

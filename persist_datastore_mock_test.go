@@ -350,7 +350,7 @@ func TestCache_WithDatastoreMock(t *testing.T) {
 	}
 
 	// Delete from memory to test persistence fallback
-	cache.memory.delete("key1")
+	cache.memory.deleteFromMemory("key1")
 
 	// Should load from persistence
 	val, found, err = cache.Get(ctx, "key1")
@@ -362,7 +362,7 @@ func TestCache_WithDatastoreMock(t *testing.T) {
 	}
 
 	// Should now be in memory again
-	if _, memFound := cache.memory.get("key1"); !memFound {
+	if _, memFound := cache.memory.getFromMemory("key1"); !memFound {
 		t.Error("key1 should be promoted to memory after persistence load")
 	}
 }

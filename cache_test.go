@@ -434,7 +434,7 @@ func TestCache_Delete_PersistenceError(t *testing.T) {
 	}()
 
 	// Set directly in memory (bypass persistence which would fail)
-	cache.memory.set("key1", 42, time.Time{})
+	cache.memory.setToMemory("key1", 42, time.Time{})
 
 	// Delete should handle persistence error gracefully
 	cache.Delete(ctx, "key1")
@@ -726,16 +726,16 @@ func (e *errorPersist[K, V]) Delete(ctx context.Context, key K) error {
 	return context.DeadlineExceeded
 }
 
-func (e *errorPersist[K, V]) Load(ctx context.Context, key K) (V, time.Time, bool, error) {
+func (e *errorPersist[K, V]) Load(ctx context.Context, key K) (value V, expiry time.Time, found bool, err error) {
 	var zero V
 	return zero, time.Time{}, false, context.DeadlineExceeded
 }
 
-func (e *errorPersist[K, V]) LoadAll(ctx context.Context) (<-chan Entry[K, V], <-chan error) {
+func (e *errorPersist[K, V]) LoadAll(ctx context.Context) (entries <-chan Entry[K, V], errs <-chan error) {
 	return e.LoadRecent(ctx, 0)
 }
 
-func (e *errorPersist[K, V]) LoadRecent(ctx context.Context, limit int) (<-chan Entry[K, V], <-chan error) {
+func (e *errorPersist[K, V]) LoadRecent(ctx context.Context, limit int) (entries <-chan Entry[K, V], errs <-chan error) {
 	entryCh := make(chan Entry[K, V])
 	errCh := make(chan error, 1)
 	close(entryCh)

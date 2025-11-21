@@ -84,20 +84,22 @@ func TestSecurity_InvalidCacheID(t *testing.T) {
 			t.Errorf("New with cacheID %q failed: %v", cacheID, err)
 			continue
 		}
-		defer func() {
-			if err := cache.Close(); err != nil {
-				t.Logf("Close error: %v", err)
+		func(c *Cache[string, string]) {
+			defer func() {
+				if err := c.Close(); err != nil {
+					t.Logf("Close error: %v", err)
+				}
+			}()
+
+			// Cache should have been created but persistence should be nil (graceful degradation)
+			if c.persist != nil {
+				t.Errorf("Cache with malicious cacheID %q should not have persistence enabled", cacheID)
 			}
-		}()
 
-		// Cache should have been created but persistence should be nil (graceful degradation)
-		if cache.persist != nil {
-			t.Errorf("Cache with malicious cacheID %q should not have persistence enabled", cacheID)
-		}
-
-		// Memory-only cache should still work
-		if err := cache.Set(ctx, "test", "value", 0); err != nil {
-			t.Errorf("Set failed on memory-only cache: %v", err)
-		}
+			// Memory-only cache should still work
+			if err := c.Set(ctx, "test", "value", 0); err != nil {
+				t.Errorf("Set failed on memory-only cache: %v", err)
+			}
+		}(cache)
 	}
 }

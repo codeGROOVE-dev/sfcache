@@ -23,18 +23,26 @@ func TestFIFOvsLRU_ScanResistance(t *testing.T) {
 
 	// Test S3-FIFO
 	ctx := context.Background()
-	s3Cache, _ := bdcache.New[int, int](ctx, bdcache.WithMemorySize(cacheSize))
+	s3Cache, err := bdcache.New[int, int](ctx, bdcache.WithMemorySize(cacheSize))
+	if err != nil {
+		fmt.Printf("Failed to create cache: %v\n", err)
+		return
+	}
 
 	// Phase 1: Build working set
 	fmt.Println("Phase 1: Build working set (both caches)")
-	for i := 0; i < workingSetSize; i++ {
-		_ = s3Cache.Set(ctx, i, i, 0)
+	for i := range workingSetSize {
+		if err := s3Cache.Set(ctx, i, i, 0); err != nil {
+			fmt.Printf("Set error: %v\n", err)
+		}
 	}
 
 	// Phase 2: Access working set once (marks as hot in S3-FIFO)
 	fmt.Println("Phase 2: Access working set (marks as hot)")
-	for i := 0; i < workingSetSize; i++ {
-		_, _, _ = s3Cache.Get(ctx, i)
+	for i := range workingSetSize {
+		if _, _, err := s3Cache.Get(ctx, i); err != nil {
+			fmt.Printf("Get error: %v\n", err)
+		}
 	}
 
 	fmt.Printf("  S3-FIFO after warmup: items=%d\n", s3Cache.Len())
@@ -42,15 +50,19 @@ func TestFIFOvsLRU_ScanResistance(t *testing.T) {
 	// Phase 3: One-time scan through large dataset
 	fmt.Println("Phase 3: One-time scan through cold data")
 	for i := 100000; i < 100000+scanSize; i++ {
-		_ = s3Cache.Set(ctx, i, i, 0)
+		if err := s3Cache.Set(ctx, i, i, 0); err != nil {
+			fmt.Printf("Set error: %v\n", err)
+		}
 	}
 	fmt.Printf("  S3-FIFO after scan: items=%d\n", s3Cache.Len())
 
 	// Phase 4: Re-access working set
 	fmt.Println("Phase 4: Re-access working set")
 	s3Hits := 0
-	for i := 0; i < workingSetSize; i++ {
-		if _, found, _ := s3Cache.Get(ctx, i); found {
+	for i := range workingSetSize {
+		if _, found, err := s3Cache.Get(ctx, i); err != nil {
+			fmt.Printf("Get error: %v\n", err)
+		} else if found {
 			s3Hits++
 		}
 	}
@@ -58,15 +70,19 @@ func TestFIFOvsLRU_ScanResistance(t *testing.T) {
 	fmt.Printf("  S3-FIFO hits: %d/%d (%.1f%%)\n", s3Hits, workingSetSize, float64(s3Hits)/float64(workingSetSize)*100)
 
 	// Now test LRU with same workload
-	lruCache, _ := lru.New[int, int](cacheSize)
+	lruCache, err := lru.New[int, int](cacheSize)
+	if err != nil {
+		fmt.Printf("Failed to create LRU cache: %v\n", err)
+		return
+	}
 
 	// Phase 1: Build working set
-	for i := 0; i < workingSetSize; i++ {
+	for i := range workingSetSize {
 		lruCache.Add(i, i)
 	}
 
 	// Phase 2: Access working set once
-	for i := 0; i < workingSetSize; i++ {
+	for i := range workingSetSize {
 		_, _ = lruCache.Get(i)
 	}
 
@@ -77,7 +93,7 @@ func TestFIFOvsLRU_ScanResistance(t *testing.T) {
 
 	// Phase 4: Re-access working set
 	lruHits := 0
-	for i := 0; i < workingSetSize; i++ {
+	for i := range workingSetSize {
 		if _, found := lruCache.Get(i); found {
 			lruHits++
 		}
