@@ -8,12 +8,12 @@ import (
 	"time"
 )
 
-const numShards = 4
+const numShards = 16
 
 // s3fifo implements the S3-FIFO eviction algorithm from SOSP'23 paper
 // "FIFO queues are all you need for cache eviction"
 //
-// This implementation uses 4-way sharding for improved concurrent performance.
+// This implementation uses 16-way sharding for improved concurrent performance.
 // Each shard is an independent S3-FIFO instance with its own queues and lock.
 //
 // Algorithm per shard:
@@ -63,7 +63,7 @@ type entry[K comparable, V any] struct {
 // newS3FIFO creates a new sharded S3-FIFO cache with the given total capacity.
 func newS3FIFO[K comparable, V any](capacity int) *s3fifo[K, V] {
 	if capacity <= 0 {
-		capacity = 10000
+		capacity = 16384 // 2^14, divides evenly by 16 shards
 	}
 
 	// Divide capacity across shards (round up to avoid zero-capacity shards)
@@ -102,20 +102,10 @@ func newShard[K comparable, V any](capacity int) *shard[K, V] {
 	}
 }
 
-// getShard returns the shard for a given key using maphash.
+// getShard returns the shard for a given key using type-optimized hashing.
 func (c *s3fifo[K, V]) getShard(key K) *shard[K, V] {
-	var h maphash.Hash
-	h.SetSeed(c.seed)
-	//nolint:errcheck,gosec // maphash.Hash.WriteString never returns error
-	h.WriteString(any(key).(string))
-	return c.shards[h.Sum64()%numShards]
-}
-
-// getShardInt is an optimized path for common key types.
-func (c *s3fifo[K, V]) getShardInt(key K) *shard[K, V] {
 	switch k := any(key).(type) {
 	case int:
-		// Safe: modulo result is always in [0, numShards)
 		if k < 0 {
 			k = -k
 		}
@@ -136,14 +126,19 @@ func (c *s3fifo[K, V]) getShardInt(key K) *shard[K, V] {
 		h.WriteString(k)
 		return c.shards[h.Sum64()%numShards]
 	default:
-		return c.getShard(key)
+		// Fallback for other types: convert to string and hash
+		var h maphash.Hash
+		h.SetSeed(c.seed)
+		//nolint:errcheck,gosec // maphash.Hash.WriteString never returns error
+		h.WriteString(any(key).(string))
+		return c.shards[h.Sum64()%numShards]
 	}
 }
 
 // getFromMemory retrieves a value from the in-memory cache.
 // On hit, increments frequency counter (used during eviction).
 func (c *s3fifo[K, V]) getFromMemory(key K) (V, bool) {
-	return c.getShardInt(key).get(key)
+	return c.getShard(key).get(key)
 }
 
 func (s *shard[K, V]) get(key K) (V, bool) {
@@ -176,7 +171,7 @@ func (s *shard[K, V]) get(key K) (V, bool) {
 
 // setToMemory adds or updates a value in the in-memory cache.
 func (c *s3fifo[K, V]) setToMemory(key K, value V, expiry time.Time) {
-	c.getShardInt(key).set(key, value, expiry)
+	c.getShard(key).set(key, value, expiry)
 }
 
 func (s *shard[K, V]) set(key K, value V, expiry time.Time) {
@@ -224,7 +219,7 @@ func (s *shard[K, V]) set(key K, value V, expiry time.Time) {
 
 // deleteFromMemory removes a value from the in-memory cache.
 func (c *s3fifo[K, V]) deleteFromMemory(key K) {
-	c.getShardInt(key).delete(key)
+	c.getShard(key).delete(key)
 }
 
 func (s *shard[K, V]) delete(key K) {
@@ -404,7 +399,7 @@ func (c *s3fifo[K, V]) queueLens() (small, main int) {
 
 // isInSmall returns whether a key is in the small queue (for testing).
 func (c *s3fifo[K, V]) isInSmall(key K) bool {
-	s := c.getShardInt(key)
+	s := c.getShard(key)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if ent, ok := s.items[key]; ok {
@@ -415,7 +410,7 @@ func (c *s3fifo[K, V]) isInSmall(key K) bool {
 
 // setExpiry sets the expiry time for a key (for testing).
 func (c *s3fifo[K, V]) setExpiry(key K, expiry time.Time) {
-	s := c.getShardInt(key)
+	s := c.getShard(key)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if ent, ok := s.items[key]; ok {

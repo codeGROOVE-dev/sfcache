@@ -360,8 +360,8 @@ func TestCache_New_DefaultOptions(t *testing.T) {
 		}
 	}()
 
-	if cache.opts.MemorySize != 10000 {
-		t.Errorf("default memory size = %d; want 10000", cache.opts.MemorySize)
+	if cache.opts.MemorySize != 16384 {
+		t.Errorf("default memory size = %d; want 16384", cache.opts.MemorySize)
 	}
 
 	if cache.opts.DefaultTTL != 0 {
@@ -544,29 +544,29 @@ func TestCache_DeleteNonExistent(t *testing.T) {
 
 func TestCache_EvictFromMain(t *testing.T) {
 	ctx := context.Background()
-	// Cache with capacity divisible by 4 shards
-	cache, err := New[int, int](ctx, WithMemorySize(40))
+	// Cache with capacity divisible by 16 shards (48 = 3 per shard)
+	cache, err := New[int, int](ctx, WithMemorySize(48))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	defer func() { _ = cache.Close() }() //nolint:errcheck // Test cleanup
 
 	// Fill small queue and promote items to main by accessing them twice
-	for i := range 60 {
+	for i := range 72 {
 		_ = cache.Set(ctx, i, i, 0) //nolint:errcheck // Test fixture
 		// Access immediately to promote to main
 		_, _, _ = cache.Get(ctx, i) //nolint:errcheck // Exercising code path
 	}
 
 	// Add more items to force eviction from main queue
-	for i := range 40 {
+	for i := range 48 {
 		_ = cache.Set(ctx, i+100, i+100, 0) //nolint:errcheck // Test fixture
 		_, _, _ = cache.Get(ctx, i+100)     //nolint:errcheck // Exercising code path
 	}
 
 	// Cache should not exceed capacity
-	if cache.Len() > 40 {
-		t.Errorf("cache length = %d; should not exceed 40", cache.Len())
+	if cache.Len() > 48 {
+		t.Errorf("cache length = %d; should not exceed 48", cache.Len())
 	}
 }
 

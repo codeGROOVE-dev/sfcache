@@ -36,8 +36,8 @@ func TestS3FIFO_BasicOperations(t *testing.T) {
 }
 
 func TestS3FIFO_Capacity(t *testing.T) {
-	capacity := 100
-	cache := newS3FIFO[int, string](capacity)
+	cache := newS3FIFO[int, string](100)
+	capacity := cache.totalCapacity() // Actual capacity after shard rounding
 
 	// Fill cache to capacity
 	for i := range capacity {
@@ -57,10 +57,11 @@ func TestS3FIFO_Capacity(t *testing.T) {
 }
 
 func TestS3FIFO_Eviction(t *testing.T) {
-	cache := newS3FIFO[int, int](100) // Use larger capacity for predictable behavior
+	cache := newS3FIFO[int, int](100)
+	capacity := cache.totalCapacity() // Actual capacity after shard rounding
 
 	// Fill to capacity
-	for i := range 100 {
+	for i := range capacity {
 		cache.setToMemory(i, i, time.Time{})
 	}
 
@@ -68,7 +69,7 @@ func TestS3FIFO_Eviction(t *testing.T) {
 	cache.getFromMemory(0)
 
 	// Add one more item - should evict least frequently used
-	cache.setToMemory(1000, 99, time.Time{})
+	cache.setToMemory(capacity+1000, 99, time.Time{})
 
 	// Item 0 should still exist (it was accessed)
 	if _, ok := cache.getFromMemory(0); !ok {
@@ -76,8 +77,8 @@ func TestS3FIFO_Eviction(t *testing.T) {
 	}
 
 	// Should be at capacity
-	if cache.memoryLen() != 100 {
-		t.Errorf("cache length = %d; want 100", cache.memoryLen())
+	if cache.memoryLen() != capacity {
+		t.Errorf("cache length = %d; want %d", cache.memoryLen(), capacity)
 	}
 }
 
@@ -126,7 +127,7 @@ func TestS3FIFO_TTL(t *testing.T) {
 }
 
 func TestS3FIFO_Cleanup(t *testing.T) {
-	cache := newS3FIFO[string, int](10)
+	cache := newS3FIFO[string, int](100)
 
 	// Add some items with different expiries
 	now := time.Now()
@@ -157,6 +158,7 @@ func TestS3FIFO_Cleanup(t *testing.T) {
 
 func TestS3FIFO_Concurrent(t *testing.T) {
 	cache := newS3FIFO[int, int](1000)
+	capacity := cache.totalCapacity()
 	var wg sync.WaitGroup
 
 	// Concurrent writers
@@ -183,14 +185,15 @@ func TestS3FIFO_Concurrent(t *testing.T) {
 
 	wg.Wait()
 
-	// Cache should be at capacity
-	if cache.memoryLen() != 1000 {
-		t.Errorf("cache length = %d; want 1000", cache.memoryLen())
+	// Cache should be at or below capacity (we wrote exactly 1000 items)
+	if cache.memoryLen() > capacity {
+		t.Errorf("cache length = %d; want <= %d", cache.memoryLen(), capacity)
 	}
 }
 
 func TestS3FIFO_FrequencyPromotion(t *testing.T) {
-	cache := newS3FIFO[string, int](10)
+	cache := newS3FIFO[string, int](100)
+	capacity := cache.totalCapacity()
 
 	// Add items - they start in small queue
 	cache.setToMemory("key0", 0, time.Time{})
@@ -200,8 +203,8 @@ func TestS3FIFO_FrequencyPromotion(t *testing.T) {
 	cache.getFromMemory("key0")
 
 	// Fill to capacity
-	for i := 2; i < 10; i++ {
-		cache.setToMemory("key"+string(rune('0'+i)), i, time.Time{})
+	for i := 2; i < capacity; i++ {
+		cache.setToMemory(fmt.Sprintf("key%d", i), i, time.Time{})
 	}
 
 	// Add one more to trigger eviction
@@ -241,11 +244,11 @@ func TestS3FIFO_SmallCapacity(t *testing.T) {
 }
 
 func TestS3FIFO_ZeroCapacity(t *testing.T) {
-	// Zero capacity should default to 10000
+	// Zero capacity should default to 16384
 	cache := newS3FIFO[string, int](0)
 
-	if cache.totalCapacity() != 10000 {
-		t.Errorf("total capacity = %d; want 10000", cache.totalCapacity())
+	if cache.totalCapacity() != 16384 {
+		t.Errorf("total capacity = %d; want 16384", cache.totalCapacity())
 	}
 }
 

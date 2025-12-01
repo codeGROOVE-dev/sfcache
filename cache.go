@@ -19,7 +19,7 @@ type Cache[K comparable, V any] struct {
 // New creates a new cache with the given options.
 func New[K comparable, V any](ctx context.Context, options ...Option) (*Cache[K, V], error) {
 	opts := &Options{
-		MemorySize: 10000,
+		MemorySize: 16384, // 2^14, divides evenly by 16 shards
 	}
 	for _, opt := range options {
 		opt(opts)
@@ -139,15 +139,15 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (V, bool, error) {
 	return val, true, nil
 }
 
-// calculateExpiry returns the expiry time based on TTL and default TTL.
-func (c *Cache[K, V]) calculateExpiry(ttl time.Duration) time.Time {
-	if ttl > 0 {
-		return time.Now().Add(ttl)
+// expiry returns the expiry time based on TTL and default TTL.
+func (c *Cache[K, V]) expiry(ttl time.Duration) time.Time {
+	if ttl <= 0 {
+		ttl = c.opts.DefaultTTL
 	}
-	if c.opts.DefaultTTL > 0 {
-		return time.Now().Add(c.opts.DefaultTTL)
+	if ttl <= 0 {
+		return time.Time{}
 	}
-	return time.Time{}
+	return time.Now().Add(ttl)
 }
 
 // Set stores a value in the cache with an optional TTL.
@@ -162,7 +162,7 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, ttl time.Duration
 		return nil
 	}
 
-	expiry := c.calculateExpiry(ttl)
+	expiry := c.expiry(ttl)
 
 	// Validate key early if persistence is enabled
 	if c.persist != nil {
@@ -188,7 +188,7 @@ func (c *Cache[K, V]) Set(ctx context.Context, key K, value V, ttl time.Duration
 // Key validation and in-memory caching happen synchronously. Persistence errors are logged but not returned.
 // Returns an error only for validation failures (e.g., invalid key format).
 func (c *Cache[K, V]) SetAsync(ctx context.Context, key K, value V, ttl time.Duration) error {
-	expiry := c.calculateExpiry(ttl)
+	expiry := c.expiry(ttl)
 
 	// Validate key early if persistence is enabled (synchronous)
 	if c.persist != nil {
