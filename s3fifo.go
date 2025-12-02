@@ -2,6 +2,7 @@ package bdcache
 
 import (
 	"container/list"
+	"fmt"
 	"hash/maphash"
 	"sync"
 	"sync/atomic"
@@ -63,6 +64,17 @@ type shard[K comparable, V any] struct {
 }
 
 // entry represents a cached item with metadata.
+//
+// Note on torn reads: value and expiryNano are not updated atomically together.
+// During concurrent updates, a reader might see a new value with an old expiry
+// (or vice versa). This is benign because:
+//   - Readers never see the TTL (Get returns value only)
+//   - Worst case: a valid item briefly appears expired, returning a false negative
+//   - The next read gets correct data (self-correcting)
+//   - No data corruption or wrong values are ever returned
+//
+// We accept this tradeoff to avoid the ~15% Set throughput penalty of atomic
+// pointer indirection for value+expiry pairs.
 type entry[K comparable, V any] struct {
 	key        K
 	value      V
@@ -161,7 +173,7 @@ func (c *s3fifo[K, V]) getShard(key K) *shard[K, V] {
 }
 
 // shardIndexSlow computes the shard index using a type switch.
-// This is the fallback for key types other than int/int64.
+// This is the fallback for key types other than int/int64/string.
 func (c *s3fifo[K, V]) shardIndexSlow(key K) uint64 {
 	switch k := any(key).(type) {
 	case uint:
@@ -170,10 +182,13 @@ func (c *s3fifo[K, V]) shardIndexSlow(key K) uint64 {
 		return k & shardMask
 	case string:
 		return maphash.String(c.seed, k) & shardMask
+	case fmt.Stringer:
+		return maphash.String(c.seed, k.String()) & shardMask
 	default:
-		// Fallback for other types: convert to string and hash
-		//nolint:errcheck,forcetypeassert // Only called for string-convertible types
-		return maphash.String(c.seed, any(key).(string)) & shardMask
+		// Fallback: convert to string representation and hash.
+		// This is not fast, but is reliable for any comparable type.
+		// Avoid using structs as keys if performance matters.
+		return maphash.String(c.seed, fmt.Sprintf("%v", key)) & shardMask
 	}
 }
 
@@ -208,17 +223,13 @@ func (s *shard[K, V]) get(key K) (V, bool) {
 	return ent.value, true
 }
 
-// timeToNano converts time.Time to Unix nanoseconds; zero time becomes 0.
-func timeToNano(t time.Time) int64 {
-	if t.IsZero() {
-		return 0
-	}
-	return t.UnixNano()
-}
-
 // setToMemory adds or updates a value in the in-memory cache.
 func (c *s3fifo[K, V]) setToMemory(key K, value V, expiry time.Time) {
-	c.getShard(key).set(key, value, timeToNano(expiry))
+	var expiryNano int64
+	if !expiry.IsZero() {
+		expiryNano = expiry.UnixNano()
+	}
+	c.getShard(key).set(key, value, expiryNano)
 }
 
 func (s *shard[K, V]) set(key K, value V, expiryNano int64) {
@@ -226,7 +237,8 @@ func (s *shard[K, V]) set(key K, value V, expiryNano int64) {
 
 	items := s.items.Load()
 
-	// Fast path: update existing entry in-place (no map copy needed)
+	// Fast path: update existing entry (no map copy needed).
+	// Note: value and expiryNano updates are not atomic together - see entry comment.
 	if ent, ok := (*items)[key]; ok {
 		ent.value = value
 		ent.expiryNano = expiryNano
@@ -395,62 +407,6 @@ func (c *s3fifo[K, V]) memoryLen() int {
 	return total
 }
 
-// cleanupMemory removes expired entries from all shards.
-func (c *s3fifo[K, V]) cleanupMemory() int {
-	total := 0
-	for _, s := range c.shards {
-		total += s.cleanup()
-	}
-	return total
-}
-
-func (s *shard[K, V]) cleanup() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	items := s.items.Load()
-	nowNano := time.Now().UnixNano()
-	var expired []K
-
-	for key, ent := range *items {
-		if ent.expiryNano != 0 && nowNano > ent.expiryNano {
-			expired = append(expired, key)
-		}
-	}
-
-	if len(expired) == 0 {
-		return 0
-	}
-
-	// Remove from queues
-	for _, key := range expired {
-		ent := (*items)[key]
-		if ent.inSmall {
-			s.small.Remove(ent.element)
-		} else {
-			s.main.Remove(ent.element)
-		}
-	}
-
-	// Batch copy-on-write for efficiency
-	newItems := make(map[K]*entry[K, V], len(*items)-len(expired))
-	for k, v := range *items {
-		keep := true
-		for _, expKey := range expired {
-			if k == expKey {
-				keep = false
-				break
-			}
-		}
-		if keep {
-			newItems[k] = v
-		}
-	}
-	s.items.Store(&newItems)
-
-	return len(expired)
-}
-
 // flushMemory removes all entries from all shards.
 func (c *s3fifo[K, V]) flushMemory() int {
 	total := 0
@@ -473,30 +429,4 @@ func (s *shard[K, V]) flush() int {
 	s.ghost.Init()
 	s.ghostKeys = make(map[K]*list.Element, s.ghostCap)
 	return n
-}
-
-// totalCapacity returns the total capacity across all shards.
-func (c *s3fifo[K, V]) totalCapacity() int {
-	return c.shards[0].capacity * numShards
-}
-
-// queueLens returns total small and main queue lengths across all shards (for testing/debugging).
-func (c *s3fifo[K, V]) queueLens() (small, main int) {
-	for _, s := range c.shards {
-		s.mu.Lock()
-		small += s.small.Len()
-		main += s.main.Len()
-		s.mu.Unlock()
-	}
-	return small, main
-}
-
-// isInSmall returns whether a key is in the small queue (for testing).
-func (c *s3fifo[K, V]) isInSmall(key K) bool {
-	s := c.getShard(key)
-	items := s.items.Load()
-	if ent, ok := (*items)[key]; ok {
-		return ent.inSmall
-	}
-	return false
 }

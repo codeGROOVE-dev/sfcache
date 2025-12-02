@@ -10,45 +10,11 @@
 
 Stupid fast in-memory Go cache with optional L2 persistence layer.
 
-## Install
-
-```bash
-go get github.com/codeGROOVE-dev/bdcache
-```
-
-## Use
-
-```go
-import (
-    "github.com/codeGROOVE-dev/bdcache"
-    "github.com/codeGROOVE-dev/bdcache/persist/localfs"
-)
-
-// Memory only
-cache, _ := bdcache.New[string, int](ctx)
-cache.Set(ctx, "answer", 42, 0)           // Synchronous: returns after persistence completes
-cache.SetAsync(ctx, "answer", 42, 0)      // Async: returns immediately, persists in background
-val, found, _ := cache.Get(ctx, "answer")
-
-// With local file persistence
-p, _ := localfs.New[string, User]("myapp", "")
-cache, _ := bdcache.New[string, User](ctx,
-    bdcache.WithPersistence(p))
-
-// With Valkey/Redis persistence
-p, _ := valkey.New[string, User](ctx, "myapp", "localhost:6379")
-cache, _ := bdcache.New[string, User](ctx,
-    bdcache.WithPersistence(p))
-
-// Cloud Run auto-detection (datastore in Cloud Run, localfs elsewhere)
-p, _ := cloudrun.New[string, User](ctx, "myapp")
-cache, _ := bdcache.New[string, User](ctx,
-    bdcache.WithPersistence(p))
-```
+Designed originally for persistently caching HTTP fetches in unreliable environments like Google Cloud Run, this cache has something for everyone.
 
 ## Features
 
-- **Faster than a bat out of hell** - Low latency, high throughput
+- **Faster than a bat out of hell** - Best-in-class latency and throughput
 - **S3-FIFO eviction** - Better hit-rates than LRU ([learn more](https://s3fifo.com/))
 - **Pluggable persistence** - Bring your own database or use built-in backends:
   - [`persist/localfs`](persist/localfs) - Local files (gob encoding, zero dependencies)
@@ -59,6 +25,43 @@ cache, _ := bdcache.New[string, User](ctx,
 - **Graceful degradation** - Cache works even if persistence fails
 - **Zero allocation reads** - minimal GC thrashing
 - **Type safe** - Go generics
+
+## Usage
+
+As a stupid-fast in-memory cache:
+
+```go
+import "github.com/codeGROOVE-dev/bdcache"
+
+// strings as keys, ints as values
+cache, _ := bdcache.New[string, int](ctx)
+cache.Set(ctx, "answer", 42, 0)
+val, found, err := cache.Get(ctx, "answer")
+```
+
+With local file persistence to survive restarts:
+
+```go
+import (
+  "github.com/codeGROOVE-dev/bdcache"
+  "github.com/codeGROOVE-dev/bdcache/persist/localfs"
+)
+
+p, err := localfs.New[string, User]("myapp", "")
+cache, _ := bdcache.New[string, User](ctx, bdcache.WithPersistence(p))
+
+cache.SetAsync(ctx, "answer", 42, 0) // Don't wait for the key to persist
+```
+
+A persistent cache suitable for Cloud Run or local development; uses Cloud Datastore if available
+
+```go
+p, _ := cloudrun.New[string, User](ctx, "myapp")
+cache, _ := bdcache.New[string, User](ctx, bdcache.WithPersistence(p))
+```
+
+
+
 
 ## Performance against the Competition
 
@@ -71,8 +74,8 @@ Here's the results from an M4 MacBook Pro - run `make bench` to see the results 
 | Cache         | Size=1% | Size=2.5% | Size=5% |
 |---------------|---------|-----------|---------|
 | bdcache 🟡    |  94.46% |    94.89% |  95.09% |
-| otter 🦦      |  94.28% |    94.69% |  95.09% |
-| ristretto ☕  |  91.62% |    92.45% |  93.03% |
+| otter 🦦      |  94.27% |    94.68% |  95.09% |
+| ristretto ☕  |  91.63% |    92.44% |  93.02% |
 | tinylfu 🔬    |  94.31% |    94.87% |  95.09% |
 | freecache 🆓  |  94.03% |    94.15% |  94.75% |
 | lru 📚        |  94.10% |    94.84% |  95.09% |
@@ -83,113 +86,113 @@ Here's the results from an M4 MacBook Pro - run `make bench` to see the results 
 
 | Cache         | Get ns/op | Get B/op | Get allocs | Set ns/op | Set B/op | Set allocs |
 |---------------|-----------|----------|------------|-----------|----------|------------|
-| bdcache 🟡    |       9.0 |        0 |          0 |      21.0 |        0 |          0 |
-| lru 📚        |      24.0 |        0 |          0 |      23.0 |        0 |          0 |
-| ristretto ☕  |      32.0 |       14 |          0 |      67.0 |      119 |          3 |
-| otter 🦦      |      35.0 |        0 |          0 |     140.0 |       51 |          1 |
-| freecache 🆓  |      73.0 |       15 |          1 |      58.0 |        4 |          0 |
-| tinylfu 🔬    |      88.0 |        3 |          0 |     107.0 |      175 |          3 |
+| bdcache 🟡    |       9.0 |        0 |          0 |      20.0 |        0 |          0 |
+| lru 📚        |      22.0 |        0 |          0 |      22.0 |        0 |          0 |
+| ristretto ☕  |      31.0 |       14 |          0 |      68.0 |      120 |          3 |
+| otter 🦦      |      34.0 |        0 |          0 |     138.0 |       51 |          1 |
+| freecache 🆓  |      71.0 |       15 |          1 |      56.0 |        4 |          0 |
+| tinylfu 🔬    |      84.0 |        3 |          0 |     105.0 |      175 |          3 |
 
-🏆 Get latency: +167% faster than 2nd best (lru)
-🏆 Set latency: +9.5% faster than 2nd best (lru)
+🏆 Get latency: +144% faster than 2nd best (lru)
+🏆 Set latency: +10% faster than 2nd best (lru)
 
 ### Single-Threaded Throughput (mixed read/write)
 
 | Cache         | Get QPS    | Set QPS    |
 |---------------|------------|------------|
-| bdcache 🟡    |   75.49M   |   41.56M   |
-| lru 📚        |   34.86M   |   35.33M   |
-| ristretto ☕  |   28.38M   |   13.59M   |
-| otter 🦦      |   25.59M   |    7.17M   |
-| freecache 🆓  |   12.79M   |   15.80M   |
-| tinylfu 🔬    |   10.77M   |    8.94M   |
+| bdcache 🟡    |   79.25M   |   43.15M   |
+| lru 📚        |   36.39M   |   36.88M   |
+| ristretto ☕  |   28.22M   |   13.46M   |
+| otter 🦦      |   25.46M   |    7.16M   |
+| freecache 🆓  |   13.30M   |   16.32M   |
+| tinylfu 🔬    |   11.32M   |    9.34M   |
 
-🏆 Get throughput: +117% faster than 2nd best (lru)
-🏆 Set throughput: +18% faster than 2nd best (lru)
+🏆 Get throughput: +118% faster than 2nd best (lru)
+🏆 Set throughput: +17% faster than 2nd best (lru)
 
 ### Concurrent Throughput (mixed read/write): 4 threads
 
 | Cache         | Get QPS    | Set QPS    |
 |---------------|------------|------------|
-| bdcache 🟡    |   29.51M   |   31.43M   |
-| otter 🦦      |   28.96M   |    4.17M   |
-| ristretto ☕  |   27.16M   |   13.23M   |
-| freecache 🆓  |   25.06M   |   21.94M   |
-| lru 📚        |    9.43M   |    9.59M   |
-| tinylfu 🔬    |    5.51M   |    4.85M   |
+| bdcache 🟡    |   29.62M   |   29.92M   |
+| ristretto ☕  |   25.98M   |   13.12M   |
+| freecache 🆓  |   25.36M   |   21.84M   |
+| otter 🦦      |   23.14M   |    3.99M   |
+| lru 📚        |    9.39M   |    9.64M   |
+| tinylfu 🔬    |    5.75M   |    4.91M   |
 
-🏆 Get throughput: +1.9% faster than 2nd best (otter)
-🏆 Set throughput: +43% faster than 2nd best (freecache)
+🏆 Get throughput: +14% faster than 2nd best (ristretto)
+🏆 Set throughput: +37% faster than 2nd best (freecache)
 
 ### Concurrent Throughput (mixed read/write): 8 threads
 
 | Cache         | Get QPS    | Set QPS    |
 |---------------|------------|------------|
-| bdcache 🟡    |   22.16M   |   18.82M   |
-| otter 🦦      |   19.51M   |    3.14M   |
-| ristretto ☕  |   18.62M   |   11.60M   |
-| freecache 🆓  |   16.60M   |   15.92M   |
-| lru 📚        |    7.62M   |    7.75M   |
-| tinylfu 🔬    |    4.95M   |    4.26M   |
+| bdcache 🟡    |   22.19M   |   18.68M   |
+| otter 🦦      |   19.74M   |    3.03M   |
+| ristretto ☕  |   18.82M   |   11.39M   |
+| freecache 🆓  |   16.83M   |   16.30M   |
+| lru 📚        |    7.55M   |    7.68M   |
+| tinylfu 🔬    |    4.95M   |    4.15M   |
 
-🏆 Get throughput: +14% faster than 2nd best (otter)
-🏆 Set throughput: +18% faster than 2nd best (freecache)
+🏆 Get throughput: +12% faster than 2nd best (otter)
+🏆 Set throughput: +15% faster than 2nd best (freecache)
 
 ### Concurrent Throughput (mixed read/write): 12 threads
 
 | Cache         | Get QPS    | Set QPS    |
 |---------------|------------|------------|
-| bdcache 🟡    |   24.29M   |   24.21M   |
-| ristretto ☕  |   22.76M   |   11.54M   |
-| otter 🦦      |   21.65M   |    2.79M   |
-| freecache 🆓  |   17.25M   |   16.53M   |
-| lru 📚        |    7.58M   |    7.62M   |
-| tinylfu 🔬    |    4.51M   |    3.87M   |
+| bdcache 🟡    |   24.49M   |   24.03M   |
+| ristretto ☕  |   22.85M   |   11.48M   |
+| otter 🦦      |   21.77M   |    2.92M   |
+| freecache 🆓  |   17.45M   |   16.70M   |
+| lru 📚        |    7.42M   |    7.62M   |
+| tinylfu 🔬    |    4.55M   |    3.70M   |
 
-🏆 Get throughput: +6.7% faster than 2nd best (ristretto)
-🏆 Set throughput: +47% faster than 2nd best (freecache)
+🏆 Get throughput: +7.2% faster than 2nd best (ristretto)
+🏆 Set throughput: +44% faster than 2nd best (freecache)
 
 ### Concurrent Throughput (mixed read/write): 16 threads
 
 | Cache         | Get QPS    | Set QPS    |
 |---------------|------------|------------|
-| bdcache 🟡    |   16.24M   |   15.77M   |
-| otter 🦦      |   16.02M   |    2.76M   |
-| ristretto ☕  |   15.41M   |   12.50M   |
-| freecache 🆓  |   15.05M   |   14.61M   |
-| lru 📚        |    7.45M   |    7.47M   |
-| tinylfu 🔬    |    4.71M   |    3.61M   |
+| bdcache 🟡    |   15.96M   |   15.55M   |
+| otter 🦦      |   15.64M   |    2.84M   |
+| ristretto ☕  |   15.59M   |   12.31M   |
+| freecache 🆓  |   15.24M   |   14.72M   |
+| lru 📚        |    7.47M   |    7.42M   |
+| tinylfu 🔬    |    4.71M   |    3.43M   |
 
-🏆 Get throughput: +1.4% faster than 2nd best (otter)
-🏆 Set throughput: +8.0% faster than 2nd best (freecache)
+🏆 Get throughput: +2.0% faster than 2nd best (otter)
+🏆 Set throughput: +5.6% faster than 2nd best (freecache)
 
 ### Concurrent Throughput (mixed read/write): 24 threads
 
 | Cache         | Get QPS    | Set QPS    |
 |---------------|------------|------------|
-| bdcache 🟡    |   16.16M   |   15.47M   |
-| otter 🦦      |   15.80M   |    2.87M   |
-| ristretto ☕  |   15.48M   |   13.28M   |
-| freecache 🆓  |   14.92M   |   14.36M   |
-| lru 📚        |    7.69M   |    7.59M   |
-| tinylfu 🔬    |    5.03M   |    3.84M   |
+| bdcache 🟡    |   15.93M   |   15.41M   |
+| otter 🦦      |   15.81M   |    2.88M   |
+| ristretto ☕  |   15.57M   |   13.20M   |
+| freecache 🆓  |   14.58M   |   14.10M   |
+| lru 📚        |    7.59M   |    7.80M   |
+| tinylfu 🔬    |    4.96M   |    3.73M   |
 
-🏆 Get throughput: +2.3% faster than 2nd best (otter)
-🏆 Set throughput: +7.7% faster than 2nd best (freecache)
+🏆 Get throughput: +0.7% faster than 2nd best (otter)
+🏆 Set throughput: +9.2% faster than 2nd best (freecache)
 
 ### Concurrent Throughput (mixed read/write): 32 threads
 
 | Cache         | Get QPS    | Set QPS    |
 |---------------|------------|------------|
-| bdcache 🟡    |   15.85M   |   15.41M   |
-| otter 🦦      |   15.71M   |    2.85M   |
-| ristretto ☕  |   15.60M   |   13.16M   |
-| freecache 🆓  |   14.33M   |   14.13M   |
-| lru 📚        |    7.70M   |    8.07M   |
-| tinylfu 🔬    |    5.32M   |    2.99M   |
+| bdcache 🟡    |   16.68M   |   15.38M   |
+| otter 🦦      |   15.87M   |    2.87M   |
+| ristretto ☕  |   15.55M   |   13.50M   |
+| freecache 🆓  |   14.64M   |   13.84M   |
+| lru 📚        |    7.87M   |    8.01M   |
+| tinylfu 🔬    |    5.12M   |    3.01M   |
 
-🏆 Get throughput: +0.9% faster than 2nd best (otter)
-🏆 Set throughput: +9.1% faster than 2nd best (freecache)
+🏆 Get throughput: +5.1% faster than 2nd best (otter)
+🏆 Set throughput: +11% faster than 2nd best (freecache)
 
 NOTE: Performance characteristics often have trade-offs. There are almost certainly workloads where other cache implementations are faster, but nobody blends speed and persistence the way that bdcache does.
 
