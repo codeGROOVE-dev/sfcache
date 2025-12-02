@@ -555,15 +555,15 @@ func TestCache_GhostQueue(t *testing.T) {
 func TestCache_MainQueueEviction(t *testing.T) {
 	ctx := context.Background()
 
-	// Create cache with capacity divisible by 32 shards (64 = 2 per shard)
-	cache, err := New[string, int](ctx, WithMemorySize(64))
+	// Create cache with 20000 capacity (approx 10 per shard with 2048 shards)
+	cache, err := New[string, int](ctx, WithMemorySize(20000))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	defer func() { _ = cache.Close() }() //nolint:errcheck // Test cleanup
 
 	// Insert and access items to get them into Main queue
-	for i := range 96 {
+	for i := range 25000 {
 		key := fmt.Sprintf("key%d", i)
 		if err := cache.Set(ctx, key, i, 0); err != nil {
 			t.Fatalf("Set: %v", err)
@@ -573,17 +573,17 @@ func TestCache_MainQueueEviction(t *testing.T) {
 	}
 
 	// Insert more items to trigger eviction from Main queue
-	for i := range 64 {
-		key := fmt.Sprintf("key%d", i+100)
-		if err := cache.Set(ctx, key, i+100, 0); err != nil {
+	for i := range 10000 {
+		key := fmt.Sprintf("key%d", i+30000)
+		if err := cache.Set(ctx, key, i+30000, 0); err != nil {
 			t.Fatalf("Set: %v", err)
 		}
 		_, _, _ = cache.Get(ctx, key) //nolint:errcheck // Exercising code path
 	}
 
-	// Verify cache is at capacity
-	if cache.Len() > 64 {
-		t.Errorf("Cache length %d exceeds capacity 64", cache.Len())
+	// Verify cache is at capacity (with 2048 shards, effective capacity is ~20480)
+	if cache.Len() > 20480 {
+		t.Errorf("Cache length %d exceeds capacity 20480", cache.Len())
 	}
 }
 

@@ -36,8 +36,8 @@ func TestS3FIFO_BasicOperations(t *testing.T) {
 }
 
 func TestS3FIFO_Capacity(t *testing.T) {
-	cache := newS3FIFO[int, string](100)
-	capacity := 128 // 100 rounds up to 128 (32 per shard * 4 shards)
+	cache := newS3FIFO[int, string](20000)
+	capacity := 20480 // 20000 rounds up to 20480 (10 per shard * 2048 shards)
 
 	// Fill cache to capacity
 	for i := range capacity {
@@ -57,8 +57,8 @@ func TestS3FIFO_Capacity(t *testing.T) {
 }
 
 func TestS3FIFO_Eviction(t *testing.T) {
-	cache := newS3FIFO[int, int](100)
-	capacity := 128 // 100 rounds up to 128 (32 per shard * 4 shards)
+	cache := newS3FIFO[int, int](20000)
+	capacity := 20480 // 20000 rounds up to 20480 (10 per shard * 2048 shards)
 
 	// Fill to capacity
 	for i := range capacity {
@@ -159,27 +159,43 @@ func TestS3FIFO_Concurrent(t *testing.T) {
 }
 
 func TestS3FIFO_FrequencyPromotion(t *testing.T) {
-	cache := newS3FIFO[string, int](100)
-	capacity := 128 // 100 rounds up to 128 (32 per shard * 4 shards)
+	// Use a larger capacity to ensure meaningful per-shard capacity
+	// With 512 shards, 10000 items = ~20 per shard
+	cache := newS3FIFO[int, int](10000)
 
-	// Add items - they start in small queue
-	cache.setToMemory("key0", 0, time.Time{})
-	cache.setToMemory("key1", 1, time.Time{})
-
-	// Access key0 to increase frequency (will promote to main on next eviction)
-	cache.getFromMemory("key0")
-
-	// Fill to capacity
-	for i := 2; i < capacity; i++ {
-		cache.setToMemory(fmt.Sprintf("key%d", i), i, time.Time{})
+	// Fill cache with items using int keys for predictable sharding
+	for i := range 10000 {
+		cache.setToMemory(i, i, time.Time{})
 	}
 
-	// Add one more to trigger eviction
-	cache.setToMemory("new", 99, time.Time{})
+	// Access even-numbered keys to increase their frequency
+	for i := 0; i < 10000; i += 2 {
+		cache.getFromMemory(i)
+	}
 
-	// key0 should still exist - it was accessed so it gets promoted instead of evicted
-	if _, ok := cache.getFromMemory("key0"); !ok {
-		t.Error("key0 should not have been evicted due to frequency access")
+	// Add more items to trigger evictions
+	for i := 10000; i < 15000; i++ {
+		cache.setToMemory(i, i, time.Time{})
+	}
+
+	// Count how many accessed items survived vs unaccessed
+	accessedSurvived := 0
+	unaccesedSurvived := 0
+	for i := range 10000 {
+		if _, ok := cache.getFromMemory(i); ok {
+			if i%2 == 0 {
+				accessedSurvived++
+			} else {
+				unaccesedSurvived++
+			}
+		}
+	}
+
+	// Accessed items should survive at higher rate than unaccessed
+	// This verifies the frequency promotion mechanism works
+	if accessedSurvived <= unaccesedSurvived {
+		t.Errorf("accessed items (%d) should survive more than unaccessed (%d)",
+			accessedSurvived, unaccesedSurvived)
 	}
 }
 
@@ -263,27 +279,28 @@ func BenchmarkS3FIFO_Mixed(b *testing.B) {
 // Test S3-FIFO behavior: hot items survive one-hit wonder floods
 func TestS3FIFOBehavior(t *testing.T) {
 	ctx := context.Background()
-	cache, err := New[int, int](ctx, WithMemorySize(100))
+	// Use larger capacity for meaningful per-shard sizes with 2048 shards
+	cache, err := New[int, int](ctx, WithMemorySize(10000))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Insert hot items that will be accessed multiple times
-	for i := range 50 {
+	for i := range 5000 {
 		if err := cache.Set(ctx, i, i, 0); err != nil {
 			t.Fatalf("Set failed: %v", err)
 		}
 	}
 
 	// Access hot items once (marks them for promotion)
-	for i := range 50 {
+	for i := range 5000 {
 		if _, _, err := cache.Get(ctx, i); err != nil {
 			t.Fatalf("Get failed: %v", err)
 		}
 	}
 
 	// Insert one-hit wonders (should be evicted before hot items)
-	for i := 1000; i < 1060; i++ {
+	for i := 20000; i < 26000; i++ {
 		if err := cache.Set(ctx, i, i, 0); err != nil {
 			t.Fatalf("Set failed: %v", err)
 		}
@@ -291,15 +308,15 @@ func TestS3FIFOBehavior(t *testing.T) {
 
 	// Check if hot items survived
 	hotItemsFound := 0
-	for i := range 50 {
+	for i := range 5000 {
 		if _, found, err := cache.Get(ctx, i); err == nil && found {
 			hotItemsFound++
 		}
 	}
 
 	// Hot items should mostly survive - S3-FIFO protects frequently accessed items
-	if hotItemsFound < 40 {
-		t.Errorf("Expected most hot items to survive, got %d/50", hotItemsFound)
+	if hotItemsFound < 4000 {
+		t.Errorf("Expected most hot items to survive, got %d/5000", hotItemsFound)
 	}
 }
 
@@ -395,16 +412,17 @@ func TestS3FIFODetailed(t *testing.T) {
 }
 
 func TestS3FIFO_Flush(t *testing.T) {
-	cache := newS3FIFO[string, int](1000)
+	// Use int keys for predictable sharding, large capacity to avoid evictions
+	cache := newS3FIFO[int, int](10000)
 
 	// Add some items (fewer than capacity to avoid eviction)
 	for i := range 100 {
-		cache.setToMemory(fmt.Sprintf("key%d", i), i, time.Time{})
+		cache.setToMemory(i, i, time.Time{})
 	}
 
 	// Access some to promote to main queue
 	for i := range 20 {
-		cache.getFromMemory(fmt.Sprintf("key%d", i))
+		cache.getFromMemory(i)
 	}
 
 	if cache.memoryLen() != 100 {
@@ -424,15 +442,15 @@ func TestS3FIFO_Flush(t *testing.T) {
 
 	// All keys should be gone
 	for i := range 100 {
-		if _, ok := cache.getFromMemory(fmt.Sprintf("key%d", i)); ok {
+		if _, ok := cache.getFromMemory(i); ok {
 			t.Errorf("key%d should not be found after flush", i)
 		}
 	}
 
 	// Can add new items after flush
-	cache.setToMemory("new", 999, time.Time{})
-	if val, ok := cache.getFromMemory("new"); !ok || val != 999 {
-		t.Errorf("get(new) = %v, %v; want 999, true", val, ok)
+	cache.setToMemory(999, 999, time.Time{})
+	if val, ok := cache.getFromMemory(999); !ok || val != 999 {
+		t.Errorf("get(999) = %v, %v; want 999, true", val, ok)
 	}
 }
 
@@ -510,7 +528,8 @@ func TestS3FIFO_VariousKeyTypes(t *testing.T) {
 	})
 
 	t.Run("uint64", func(t *testing.T) {
-		cache := newS3FIFO[uint64, string](100)
+		// Use larger size to ensure per-shard capacity > 1 (2048 shards)
+		cache := newS3FIFO[uint64, string](10000)
 		cache.setToMemory(uint64(1<<63), "large", time.Time{})
 		cache.setToMemory(uint64(0), "zero", time.Time{})
 

@@ -1,7 +1,6 @@
 package bdcache
 
 import (
-	"container/list"
 	"fmt"
 	"hash/maphash"
 	"sync"
@@ -11,14 +10,14 @@ import (
 )
 
 const (
-	numShards = 32
+	numShards = 2048
 	shardMask = numShards - 1 // For fast modulo via bitwise AND
 )
 
 // s3fifo implements the S3-FIFO eviction algorithm from SOSP'23 paper
 // "FIFO queues are all you need for cache eviction"
 //
-// This implementation uses 32-way sharding for improved concurrent performance.
+// This implementation uses 2048-way sharding for improved concurrent performance.
 // Each shard is an independent S3-FIFO instance with its own queues and lock.
 //
 // Algorithm per shard:
@@ -54,13 +53,111 @@ type shard[K comparable, V any] struct {
 	mu        sync.Mutex                         // Only for writes
 	_         [48]byte                           // Padding to cache line boundary
 	items     atomic.Pointer[map[K]*entry[K, V]] // Lock-free read access
-	small     *list.List
-	main      *list.List
-	ghost     *list.List
-	ghostKeys map[K]*list.Element
+	small     entryList[K, V]                    // Intrusive list for small queue
+	main      entryList[K, V]                    // Intrusive list for main queue
+	ghost     ghostList[K]                       // Intrusive list for ghost queue
+	ghostKeys map[K]*ghostEntry[K]
 	capacity  int
 	smallCap  int
 	ghostCap  int
+}
+
+// entryList is an intrusive doubly-linked list for cache entries.
+// Zero value is a valid empty list.
+type entryList[K comparable, V any] struct {
+	head *entry[K, V]
+	tail *entry[K, V]
+	len  int
+}
+
+func (l *entryList[K, V]) pushBack(e *entry[K, V]) {
+	e.prev = l.tail
+	e.next = nil
+	if l.tail != nil {
+		l.tail.next = e
+	} else {
+		l.head = e
+	}
+	l.tail = e
+	l.len++
+}
+
+func (l *entryList[K, V]) remove(e *entry[K, V]) {
+	if e.prev != nil {
+		e.prev.next = e.next
+	} else {
+		l.head = e.next
+	}
+	if e.next != nil {
+		e.next.prev = e.prev
+	} else {
+		l.tail = e.prev
+	}
+	e.prev = nil
+	e.next = nil
+	l.len--
+}
+
+func (l *entryList[K, V]) front() *entry[K, V] {
+	return l.head
+}
+
+func (l *entryList[K, V]) init() {
+	l.head = nil
+	l.tail = nil
+	l.len = 0
+}
+
+// ghostEntry is a node in the ghost queue (tracks evicted keys only).
+type ghostEntry[K comparable] struct {
+	key  K
+	prev *ghostEntry[K]
+	next *ghostEntry[K]
+}
+
+// ghostList is an intrusive doubly-linked list for ghost entries.
+type ghostList[K comparable] struct {
+	head *ghostEntry[K]
+	tail *ghostEntry[K]
+	len  int
+}
+
+func (l *ghostList[K]) pushBack(e *ghostEntry[K]) {
+	e.prev = l.tail
+	e.next = nil
+	if l.tail != nil {
+		l.tail.next = e
+	} else {
+		l.head = e
+	}
+	l.tail = e
+	l.len++
+}
+
+func (l *ghostList[K]) remove(e *ghostEntry[K]) {
+	if e.prev != nil {
+		e.prev.next = e.next
+	} else {
+		l.head = e.next
+	}
+	if e.next != nil {
+		e.next.prev = e.prev
+	} else {
+		l.tail = e.prev
+	}
+	e.prev = nil
+	e.next = nil
+	l.len--
+}
+
+func (l *ghostList[K]) front() *ghostEntry[K] {
+	return l.head
+}
+
+func (l *ghostList[K]) init() {
+	l.head = nil
+	l.tail = nil
+	l.len = 0
 }
 
 // entry represents a cached item with metadata.
@@ -78,7 +175,8 @@ type shard[K comparable, V any] struct {
 type entry[K comparable, V any] struct {
 	key        K
 	value      V
-	element    *list.Element
+	prev       *entry[K, V] // Intrusive list pointers
+	next       *entry[K, V]
 	expiryNano int64       // Unix nanoseconds; 0 means no expiry
 	accessed   atomic.Bool // Fast "was accessed" flag for S3-FIFO promotion
 	inSmall    bool        // True if in Small queue, false if in Main
@@ -136,10 +234,7 @@ func newShard[K comparable, V any](capacity int) *shard[K, V] {
 		capacity:  capacity,
 		smallCap:  smallCap,
 		ghostCap:  ghostCap,
-		small:     list.New(),
-		main:      list.New(),
-		ghost:     list.New(),
-		ghostKeys: make(map[K]*list.Element, ghostCap),
+		ghostKeys: make(map[K]*ghostEntry[K], ghostCap),
 	}
 	items := make(map[K]*entry[K, V], capacity)
 	s.items.Store(&items)
@@ -250,9 +345,9 @@ func (s *shard[K, V]) set(key K, value V, expiryNano int64) {
 
 	// Check if key is in ghost queue
 	inGhost := false
-	if ghostElem, ok := s.ghostKeys[key]; ok {
+	if ghostEnt, ok := s.ghostKeys[key]; ok {
 		inGhost = true
-		s.ghost.Remove(ghostElem)
+		s.ghost.remove(ghostEnt)
 		delete(s.ghostKeys, key)
 	}
 
@@ -271,9 +366,9 @@ func (s *shard[K, V]) set(key K, value V, expiryNano int64) {
 
 	// Add to appropriate queue
 	if ent.inSmall {
-		ent.element = s.small.PushBack(ent)
+		s.small.pushBack(ent)
 	} else {
-		ent.element = s.main.PushBack(ent)
+		s.main.pushBack(ent)
 	}
 
 	// Copy-on-write for new key
@@ -303,9 +398,9 @@ func (s *shard[K, V]) delete(key K) {
 	}
 
 	if ent.inSmall {
-		s.small.Remove(ent.element)
+		s.small.remove(ent)
 	} else {
-		s.main.Remove(ent.element)
+		s.main.remove(ent)
 	}
 
 	s.deleteFromMap(key)
@@ -313,7 +408,7 @@ func (s *shard[K, V]) delete(key K) {
 
 // evict removes one item according to S3-FIFO algorithm.
 func (s *shard[K, V]) evict() {
-	if s.small.Len() > 0 {
+	if s.small.len > 0 {
 		s.evictFromSmall()
 		return
 	}
@@ -322,15 +417,9 @@ func (s *shard[K, V]) evict() {
 
 // evictFromSmall evicts an item from the small queue.
 func (s *shard[K, V]) evictFromSmall() {
-	for s.small.Len() > 0 {
-		elem := s.small.Front()
-		ent, ok := elem.Value.(*entry[K, V])
-		if !ok {
-			s.small.Remove(elem)
-			continue
-		}
-
-		s.small.Remove(elem)
+	for s.small.len > 0 {
+		ent := s.small.front()
+		s.small.remove(ent)
 
 		// Check if accessed since last eviction attempt
 		if !ent.accessed.Swap(false) {
@@ -342,21 +431,15 @@ func (s *shard[K, V]) evictFromSmall() {
 
 		// Accessed - promote to Main queue
 		ent.inSmall = false
-		ent.element = s.main.PushBack(ent)
+		s.main.pushBack(ent)
 	}
 }
 
 // evictFromMain evicts an item from the main queue.
 func (s *shard[K, V]) evictFromMain() {
-	for s.main.Len() > 0 {
-		elem := s.main.Front()
-		ent, ok := elem.Value.(*entry[K, V])
-		if !ok {
-			s.main.Remove(elem)
-			continue
-		}
-
-		s.main.Remove(elem)
+	for s.main.len > 0 {
+		ent := s.main.front()
+		s.main.remove(ent)
 
 		// Check if accessed since last eviction attempt
 		if !ent.accessed.Swap(false) {
@@ -366,7 +449,7 @@ func (s *shard[K, V]) evictFromMain() {
 		}
 
 		// Accessed - give second chance (FIFO-Reinsertion)
-		ent.element = s.main.PushBack(ent)
+		s.main.pushBack(ent)
 	}
 }
 
@@ -385,23 +468,22 @@ func (s *shard[K, V]) deleteFromMap(key K) {
 
 // addToGhost adds a key to the ghost queue.
 func (s *shard[K, V]) addToGhost(key K) {
-	if s.ghost.Len() >= s.ghostCap {
-		elem := s.ghost.Front()
-		if ghostKey, ok := elem.Value.(K); ok {
-			delete(s.ghostKeys, ghostKey)
-		}
-		s.ghost.Remove(elem)
+	if s.ghost.len >= s.ghostCap {
+		oldest := s.ghost.front()
+		delete(s.ghostKeys, oldest.key)
+		s.ghost.remove(oldest)
 	}
 
-	elem := s.ghost.PushBack(key)
-	s.ghostKeys[key] = elem
+	ent := &ghostEntry[K]{key: key}
+	s.ghost.pushBack(ent)
+	s.ghostKeys[key] = ent
 }
 
 // memoryLen returns the total number of items across all shards.
 func (c *s3fifo[K, V]) memoryLen() int {
 	total := 0
-	for _, s := range c.shards {
-		items := s.items.Load()
+	for i := range c.shards {
+		items := c.shards[i].items.Load()
 		total += len(*items)
 	}
 	return total
@@ -410,8 +492,8 @@ func (c *s3fifo[K, V]) memoryLen() int {
 // flushMemory removes all entries from all shards.
 func (c *s3fifo[K, V]) flushMemory() int {
 	total := 0
-	for _, s := range c.shards {
-		total += s.flush()
+	for i := range c.shards {
+		total += c.shards[i].flush()
 	}
 	return total
 }
@@ -424,9 +506,9 @@ func (s *shard[K, V]) flush() int {
 	n := len(*items)
 	newItems := make(map[K]*entry[K, V], s.capacity)
 	s.items.Store(&newItems)
-	s.small.Init()
-	s.main.Init()
-	s.ghost.Init()
-	s.ghostKeys = make(map[K]*list.Element, s.ghostCap)
+	s.small.init()
+	s.main.init()
+	s.ghost.init()
+	s.ghostKeys = make(map[K]*ghostEntry[K], s.ghostCap)
 	return n
 }

@@ -489,29 +489,30 @@ func TestCache_DeleteNonExistent(t *testing.T) {
 
 func TestCache_EvictFromMain(t *testing.T) {
 	ctx := context.Background()
-	// Cache with capacity divisible by 32 shards (64 = 2 per shard)
-	cache, err := New[int, int](ctx, WithMemorySize(64))
+	// Cache with 20000 capacity (approx 10 per shard with 2048 shards)
+	cache, err := New[int, int](ctx, WithMemorySize(20000))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	defer func() { _ = cache.Close() }() //nolint:errcheck // Test cleanup
 
-	// Fill small queue and promote items to main by accessing them twice
-	for i := range 96 {
+	// Fill cache and promote items to main by accessing them
+	for i := range 25000 {
 		_ = cache.Set(ctx, i, i, 0) //nolint:errcheck // Test fixture
 		// Access immediately to promote to main
 		_, _, _ = cache.Get(ctx, i) //nolint:errcheck // Exercising code path
 	}
 
 	// Add more items to force eviction from main queue
-	for i := range 64 {
-		_ = cache.Set(ctx, i+100, i+100, 0) //nolint:errcheck // Test fixture
-		_, _, _ = cache.Get(ctx, i+100)     //nolint:errcheck // Exercising code path
+	for i := range 10000 {
+		_ = cache.Set(ctx, i+30000, i+30000, 0) //nolint:errcheck // Test fixture
+		_, _, _ = cache.Get(ctx, i+30000)       //nolint:errcheck // Exercising code path
 	}
 
-	// Cache should not exceed capacity
-	if cache.Len() > 64 {
-		t.Errorf("cache length = %d; should not exceed 64", cache.Len())
+	// Cache should not exceed configured capacity by more than shard overhead
+	// With 2048 shards and rounding, effective capacity is ~20480
+	if cache.Len() > 20480 {
+		t.Errorf("cache length = %d; should not exceed 20480", cache.Len())
 	}
 }
 
