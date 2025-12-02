@@ -60,7 +60,7 @@ cache, _ := bdcache.New[string, User](ctx,
 
 ## Performance against the Competition
 
-bdcache biases toward being the highest hit-rate for real-world workloads with the lowest read latency. We're not bad either!
+bdcache biases toward being the highest hit-rate for real-world workloads with the lowest read latency. We've met that goal:
 
 * #1 in hit-rate for real-world workloads (zipf)
 * #1 in single-threaded read latency (9 ns/op) - half the competition
