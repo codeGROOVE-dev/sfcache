@@ -17,7 +17,7 @@ type PersistentCache[K comparable, V any] struct {
 	//   cache.Store.Len(ctx)
 	//   cache.Store.Flush(ctx)
 	//   cache.Store.Cleanup(ctx, maxAge)
-	Store persist.Layer[K, V]
+	Store persist.Store[K, V]
 
 	memory     *s3fifo[K, V]
 	defaultTTL time.Duration
@@ -43,7 +43,7 @@ type PersistentCache[K comparable, V any] struct {
 //	cache.Set(ctx, "user:123", user, time.Hour)   // explicit TTL
 //	user, ok, err := cache.Get(ctx, "user:123")
 //	storeCount, _ := cache.Store.Len(ctx)
-func Persistent[K comparable, V any](ctx context.Context, p persist.Layer[K, V], opts ...Option) (*PersistentCache[K, V], error) {
+func Persistent[K comparable, V any](ctx context.Context, p persist.Store[K, V], opts ...Option) (*PersistentCache[K, V], error) {
 	cfg := defaultConfig()
 	for _, opt := range opts {
 		opt(cfg)
@@ -77,7 +77,7 @@ func (c *PersistentCache[K, V]) doWarmup(ctx context.Context) {
 	entryCh, errCh := c.Store.LoadRecent(ctx, c.warmup)
 
 	for entry := range entryCh {
-		c.memory.setToMemory(entry.Key, entry.Value, timeToNano(entry.Expiry))
+		c.memory.set(entry.Key, entry.Value, timeToNano(entry.Expiry))
 	}
 
 	// Drain error channel (errors silently ignored for best-effort warmup)
@@ -90,7 +90,7 @@ func (c *PersistentCache[K, V]) doWarmup(ctx context.Context) {
 //nolint:gocritic // unnamedResult - public API signature is intentionally clear without named returns
 func (c *PersistentCache[K, V]) Get(ctx context.Context, key K) (V, bool, error) {
 	// Check memory first
-	if val, ok := c.memory.getFromMemory(key); ok {
+	if val, ok := c.memory.get(key); ok {
 		return val, true, nil
 	}
 
@@ -102,7 +102,7 @@ func (c *PersistentCache[K, V]) Get(ctx context.Context, key K) (V, bool, error)
 	}
 
 	// Check persistence
-	val, expiry, found, err := c.Store.Load(ctx, key)
+	val, expiry, found, err := c.Store.Get(ctx, key)
 	if err != nil {
 		return zero, false, fmt.Errorf("persistence load: %w", err)
 	}
@@ -112,7 +112,7 @@ func (c *PersistentCache[K, V]) Get(ctx context.Context, key K) (V, bool, error)
 	}
 
 	// Add to memory cache for future hits
-	c.memory.setToMemory(key, val, timeToNano(expiry))
+	c.memory.set(key, val, timeToNano(expiry))
 
 	return val, true, nil
 }
@@ -171,10 +171,10 @@ func (c *PersistentCache[K, V]) Set(ctx context.Context, key K, value V, ttl ...
 	}
 
 	// ALWAYS update memory first - reliability guarantee
-	c.memory.setToMemory(key, value, timeToNano(expiry))
+	c.memory.set(key, value, timeToNano(expiry))
 
 	// Update persistence
-	if err := c.Store.Store(ctx, key, value, expiry); err != nil {
+	if err := c.Store.Set(ctx, key, value, expiry); err != nil {
 		return fmt.Errorf("persistence store failed: %w", err)
 	}
 
@@ -199,14 +199,14 @@ func (c *PersistentCache[K, V]) SetAsync(ctx context.Context, key K, value V, tt
 	}
 
 	// ALWAYS update memory first - reliability guarantee (synchronous)
-	c.memory.setToMemory(key, value, timeToNano(expiry))
+	c.memory.set(key, value, timeToNano(expiry))
 
 	// Update persistence asynchronously (fire-and-forget)
 	//nolint:contextcheck // Intentionally detached - persistence should complete even if caller cancels
 	go func() {
 		storeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := c.Store.Store(storeCtx, key, value, expiry); err != nil {
+		if err := c.Store.Set(storeCtx, key, value, expiry); err != nil {
 			slog.Error("async persistence failed", "key", key, "error", err)
 		}
 	}()
@@ -218,7 +218,7 @@ func (c *PersistentCache[K, V]) SetAsync(ctx context.Context, key K, value V, tt
 // The value is always removed from memory. Returns an error if persistence deletion fails.
 func (c *PersistentCache[K, V]) Delete(ctx context.Context, key K) error {
 	// Remove from memory first (always succeeds)
-	c.memory.deleteFromMemory(key)
+	c.memory.del(key)
 
 	// Validate key before accessing persistence (security: prevent path traversal)
 	if err := c.Store.ValidateKey(key); err != nil {
@@ -235,7 +235,7 @@ func (c *PersistentCache[K, V]) Delete(ctx context.Context, key K) error {
 // Flush removes all entries from the cache, including persistent storage.
 // Returns the total number of entries removed from memory and persistence.
 func (c *PersistentCache[K, V]) Flush(ctx context.Context) (int, error) {
-	memoryRemoved := c.memory.flushMemory()
+	memoryRemoved := c.memory.flush()
 
 	persistRemoved, err := c.Store.Flush(ctx)
 	if err != nil {
@@ -245,10 +245,10 @@ func (c *PersistentCache[K, V]) Flush(ctx context.Context) (int, error) {
 	return memoryRemoved + persistRemoved, nil
 }
 
-// Len returns the number of items in the memory cache.
-// For persistence item count, use cache.Store.Len(ctx).
+// Len returns the number of entries in the memory cache.
+// For persistence entry count, use cache.Store.Len(ctx).
 func (c *PersistentCache[K, V]) Len() int {
-	return c.memory.memoryLen()
+	return c.memory.len()
 }
 
 // Close releases resources held by the cache.

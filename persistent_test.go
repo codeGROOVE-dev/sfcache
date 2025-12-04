@@ -47,7 +47,7 @@ func (m *mockStore[K, V]) ValidateKey(key K) error {
 	return nil
 }
 
-func (m *mockStore[K, V]) Load(ctx context.Context, key K) (v V, expiry time.Time, found bool, err error) {
+func (m *mockStore[K, V]) Get(ctx context.Context, key K) (v V, expiry time.Time, found bool, err error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -70,7 +70,7 @@ func (m *mockStore[K, V]) Load(ctx context.Context, key K) (v V, expiry time.Tim
 	return entry.value, entry.expiry, true, nil
 }
 
-func (m *mockStore[K, V]) Store(ctx context.Context, key K, value V, expiry time.Time) error {
+func (m *mockStore[K, V]) Set(ctx context.Context, key K, value V, expiry time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -204,7 +204,7 @@ func TestPersistentCache_Basic(t *testing.T) {
 	}
 
 	// Verify it's in persistence
-	val, _, found, err := store.Load(ctx, "key1")
+	val, _, found, err := store.Get(ctx, "key1")
 	if err != nil {
 		t.Fatalf("store.Load: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestPersistentCache_Basic(t *testing.T) {
 		t.Fatalf("cache.Delete: %v", err)
 	}
 
-	_, _, found, err = store.Load(ctx, "key1")
+	_, _, found, err = store.Get(ctx, "key1")
 	if err != nil {
 		t.Fatalf("store.Load after delete: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestPersistentCache_GetFromPersistence(t *testing.T) {
 	store := newMockStore[string, int]()
 
 	// Pre-populate persistence
-	_ = store.Store(ctx, "key1", 42, time.Time{}) //nolint:errcheck // Test fixture
+	_ = store.Set(ctx, "key1", 42, time.Time{}) //nolint:errcheck // Test fixture
 
 	cache, err := Persistent[string, int](ctx, store)
 	if err != nil {
@@ -260,7 +260,7 @@ func TestPersistentCache_GetFromPersistenceExpired(t *testing.T) {
 	store := newMockStore[string, int]()
 
 	// Pre-populate with expired entry
-	_ = store.Store(ctx, "key1", 42, time.Now().Add(-1*time.Hour)) //nolint:errcheck // Test fixture
+	_ = store.Set(ctx, "key1", 42, time.Now().Add(-1*time.Hour)) //nolint:errcheck // Test fixture
 
 	cache, err := Persistent[string, int](ctx, store)
 	if err != nil {
@@ -284,7 +284,7 @@ func TestPersistentCache_WithWarmup(t *testing.T) {
 
 	// Pre-populate persistence with 10 items
 	for i := range 10 {
-		_ = store.Store(ctx, fmt.Sprintf("key%d", i), i, time.Time{}) //nolint:errcheck // Test fixture
+		_ = store.Set(ctx, fmt.Sprintf("key%d", i), i, time.Time{}) //nolint:errcheck // Test fixture
 	}
 
 	// Create cache with warmup limit of 5
@@ -334,7 +334,7 @@ func TestPersistentCache_SetAsync(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Should also be persisted
-	val, _, found, err = store.Load(ctx, "key1")
+	val, _, found, err = store.Get(ctx, "key1")
 	if err != nil {
 		t.Fatalf("store.Load: %v", err)
 	}
@@ -503,7 +503,7 @@ func TestPersistentCache_Get_PersistenceLoadError(t *testing.T) {
 	defer func() { _ = cache.Close() }() //nolint:errcheck // Test cleanup
 
 	// Pre-populate persistence (not in memory)
-	_ = store.Store(ctx, "key1", 42, time.Time{}) //nolint:errcheck // Test fixture
+	_ = store.Set(ctx, "key1", 42, time.Time{}) //nolint:errcheck // Test fixture
 
 	// Make persistence Load fail
 	store.setFailGet(true)
@@ -559,7 +559,7 @@ func TestPersistentCache_Flush(t *testing.T) {
 		t.Errorf("memory cache length = %d; want 10", cache.Len())
 	}
 	for i := range 10 {
-		if _, _, found, err := store.Load(ctx, fmt.Sprintf("key%d", i)); err != nil || !found {
+		if _, _, found, err := store.Get(ctx, fmt.Sprintf("key%d", i)); err != nil || !found {
 			t.Fatalf("key%d should exist in persistence", i)
 		}
 	}
@@ -581,7 +581,7 @@ func TestPersistentCache_Flush(t *testing.T) {
 
 	// Persistence should be empty
 	for i := range 10 {
-		if _, _, found, err := store.Load(ctx, fmt.Sprintf("key%d", i)); err != nil {
+		if _, _, found, err := store.Get(ctx, fmt.Sprintf("key%d", i)); err != nil {
 			t.Fatalf("Load: %v", err)
 		} else if found {
 			t.Errorf("key%d should not exist in persistence after flush", i)
@@ -731,7 +731,7 @@ func TestPersistentCache_GetOrSet(t *testing.T) {
 	}
 
 	// Value should be persisted
-	persistedVal, _, found, err := store.Load(ctx, "key1")
+	persistedVal, _, found, err := store.Get(ctx, "key1")
 	if err != nil {
 		t.Fatalf("store.Load: %v", err)
 	}
@@ -905,14 +905,14 @@ func TestPersistentCache_SetAsync_VariadicTTL(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Both should be persisted
-	_, _, found, err = store.Load(ctx, "async-default")
+	_, _, found, err = store.Get(ctx, "async-default")
 	if err != nil {
 		t.Fatalf("store.Load: %v", err)
 	}
 	if !found {
 		t.Error("async-default should be persisted")
 	}
-	_, _, found, err = store.Load(ctx, "async-explicit")
+	_, _, found, err = store.Get(ctx, "async-explicit")
 	if err != nil {
 		t.Fatalf("store.Load: %v", err)
 	}

@@ -28,12 +28,12 @@ func TestDatastorePersist_Mock_StoreLoad(t *testing.T) {
 	ctx := context.Background()
 
 	// Store a value
-	if err := dp.Store(ctx, "key1", 42, time.Time{}); err != nil {
+	if err := dp.Set(ctx, "key1", 42, time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
 	// Load the value
-	val, expiry, found, err := dp.Load(ctx, "key1")
+	val, expiry, found, err := dp.Get(ctx, "key1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestDatastorePersist_Mock_LoadMissing(t *testing.T) {
 	ctx := context.Background()
 
 	// Load non-existent key
-	_, _, found, err := dp.Load(ctx, "missing")
+	_, _, found, err := dp.Get(ctx, "missing")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -72,12 +72,12 @@ func TestDatastorePersist_Mock_TTL(t *testing.T) {
 
 	// Store with past expiry
 	past := time.Now().Add(-1 * time.Second)
-	if err := dp.Store(ctx, "expired", "value", past); err != nil {
+	if err := dp.Set(ctx, "expired", "value", past); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
 	// Should not be loadable
-	_, _, found, err := dp.Load(ctx, "expired")
+	_, _, found, err := dp.Get(ctx, "expired")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestDatastorePersist_Mock_Delete(t *testing.T) {
 	ctx := context.Background()
 
 	// Store and delete
-	if err := dp.Store(ctx, "key1", 42, time.Time{}); err != nil {
+	if err := dp.Set(ctx, "key1", 42, time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
@@ -102,7 +102,7 @@ func TestDatastorePersist_Mock_Delete(t *testing.T) {
 	}
 
 	// Should not be loadable
-	_, _, found, err := dp.Load(ctx, "key1")
+	_, _, found, err := dp.Get(ctx, "key1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestDatastorePersist_Mock_Delete(t *testing.T) {
 	}
 
 	// Verify deletion was successful
-	if _, _, found, err := dp.Load(ctx, "key1"); err != nil {
+	if _, _, found, err := dp.Get(ctx, "key1"); err != nil {
 		t.Fatalf("Load after deletion: %v", err)
 	} else if found {
 		t.Error("key1 should not be found after deletion")
@@ -130,17 +130,17 @@ func TestDatastorePersist_Mock_Update(t *testing.T) {
 	ctx := context.Background()
 
 	// Store initial value
-	if err := dp.Store(ctx, "key", "value1", time.Time{}); err != nil {
+	if err := dp.Set(ctx, "key", "value1", time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
 	// Update value
-	if err := dp.Store(ctx, "key", "value2", time.Time{}); err != nil {
+	if err := dp.Set(ctx, "key", "value2", time.Time{}); err != nil {
 		t.Fatalf("Store update: %v", err)
 	}
 
 	// Load and verify updated value
-	val, _, found, err := dp.Load(ctx, "key")
+	val, _, found, err := dp.Get(ctx, "key")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -171,12 +171,12 @@ func TestDatastorePersist_Mock_ComplexValue(t *testing.T) {
 	}
 
 	// Store complex value
-	if err := dp.Store(ctx, "user1", user, time.Time{}); err != nil {
+	if err := dp.Set(ctx, "user1", user, time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
 	// Load and verify
-	loaded, _, found, err := dp.Load(ctx, "user1")
+	loaded, _, found, err := dp.Get(ctx, "user1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -201,13 +201,13 @@ func TestDatastorePersist_Mock_LoadAll(t *testing.T) {
 		"key3": 3,
 	}
 	for k, v := range entries {
-		if err := dp.Store(ctx, k, v, time.Time{}); err != nil {
+		if err := dp.Set(ctx, k, v, time.Time{}); err != nil {
 			t.Fatalf("Store %s: %v", k, err)
 		}
 	}
 
 	// Store expired entry
-	if err := dp.Store(ctx, "expired", 99, time.Now().Add(-1*time.Second)); err != nil {
+	if err := dp.Set(ctx, "expired", 99, time.Now().Add(-1*time.Second)); err != nil {
 		t.Fatalf("Store expired: %v", err)
 	}
 
@@ -231,7 +231,7 @@ func TestDatastorePersist_Mock_LoadAll(t *testing.T) {
 
 	// Verify non-expired entries still exist
 	for k, v := range entries {
-		val, _, found, err := dp.Load(ctx, k)
+		val, _, found, err := dp.Get(ctx, k)
 		if err != nil {
 			t.Fatalf("Load %s: %v", k, err)
 		}
@@ -252,7 +252,7 @@ func TestDatastorePersist_Mock_LoadAllContextCancellation(t *testing.T) {
 
 	// Store many entries
 	for i := range 100 {
-		if err := dp.Store(baseCtx, string(rune(i)), i, time.Time{}); err != nil {
+		if err := dp.Set(baseCtx, string(rune(i)), i, time.Time{}); err != nil {
 			t.Fatalf("Store: %v", err)
 		}
 	}
@@ -292,12 +292,12 @@ func TestDatastorePersist_Mock_WithTTL(t *testing.T) {
 
 	// Store with future expiry
 	future := time.Now().Add(1 * time.Hour)
-	if err := dp.Store(ctx, "key", "value", future); err != nil {
+	if err := dp.Set(ctx, "key", "value", future); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
 	// Should be loadable
-	val, expiry, found, err := dp.Load(ctx, "key")
+	val, expiry, found, err := dp.Get(ctx, "key")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -336,12 +336,12 @@ func TestDatastorePersist_Mock_ComplexTypes(t *testing.T) {
 	}
 
 	// Store complex type
-	if err := dp.Store(ctx, "complex", data, time.Time{}); err != nil {
+	if err := dp.Set(ctx, "complex", data, time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
 	// Load and verify
-	loaded, _, found, err := dp.Load(ctx, "complex")
+	loaded, _, found, err := dp.Get(ctx, "complex")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -379,13 +379,13 @@ func TestDatastorePersist_Mock_ExpiredInLoadAll(t *testing.T) {
 	ctx := context.Background()
 
 	// Store entries with different expirations
-	if err := dp.Store(ctx, "valid1", 1, time.Now().Add(1*time.Hour)); err != nil {
+	if err := dp.Set(ctx, "valid1", 1, time.Now().Add(1*time.Hour)); err != nil {
 		t.Fatalf("Store valid1: %v", err)
 	}
-	if err := dp.Store(ctx, "valid2", 2, time.Now().Add(1*time.Hour)); err != nil {
+	if err := dp.Set(ctx, "valid2", 2, time.Now().Add(1*time.Hour)); err != nil {
 		t.Fatalf("Store valid2: %v", err)
 	}
-	if err := dp.Store(ctx, "expired", 99, time.Now().Add(-1*time.Second)); err != nil {
+	if err := dp.Set(ctx, "expired", 99, time.Now().Add(-1*time.Second)); err != nil {
 		t.Fatalf("Store expired: %v", err)
 	}
 
@@ -405,7 +405,7 @@ func TestDatastorePersist_Mock_ExpiredInLoadAll(t *testing.T) {
 	}
 
 	// Verify valid entries still accessible
-	val, _, found, err := dp.Load(ctx, "valid1")
+	val, _, found, err := dp.Get(ctx, "valid1")
 	if err != nil {
 		t.Fatalf("Load valid1: %v", err)
 	}
@@ -421,11 +421,11 @@ func TestDatastorePersist_Mock_StoreWithExpiry(t *testing.T) {
 	ctx := context.Background()
 
 	expiry := time.Now().Add(2 * time.Hour)
-	if err := dp.Store(ctx, "key1", "value1", expiry); err != nil {
+	if err := dp.Set(ctx, "key1", "value1", expiry); err != nil {
 		t.Fatalf("Store with expiry: %v", err)
 	}
 
-	val, loadedExpiry, found, err := dp.Load(ctx, "key1")
+	val, loadedExpiry, found, err := dp.Get(ctx, "key1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -449,7 +449,7 @@ func TestDatastorePersist_Mock_UnsupportedType(t *testing.T) {
 	ctx := context.Background()
 
 	// Try to store a function (which can't be JSON marshaled)
-	err := dp.Store(ctx, "key1", func() {}, time.Time{})
+	err := dp.Set(ctx, "key1", func() {}, time.Time{})
 	if err == nil {
 		t.Error("Store should fail when marshaling unsupported type")
 	}
@@ -510,16 +510,16 @@ func TestDatastorePersist_Mock_Cleanup(t *testing.T) {
 	recentPast := time.Now().Add(-90 * time.Minute)
 	future := time.Now().Add(2 * time.Hour)
 
-	if err := dp.Store(ctx, "expired-old", 1, past); err != nil {
+	if err := dp.Set(ctx, "expired-old", 1, past); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if err := dp.Store(ctx, "expired-recent", 2, recentPast); err != nil {
+	if err := dp.Set(ctx, "expired-recent", 2, recentPast); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if err := dp.Store(ctx, "valid-future", 3, future); err != nil {
+	if err := dp.Set(ctx, "valid-future", 3, future); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if err := dp.Store(ctx, "no-expiry", 4, time.Time{}); err != nil {
+	if err := dp.Set(ctx, "no-expiry", 4, time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
@@ -560,7 +560,7 @@ func TestDatastorePersist_Mock_LoadRecentWithLimit(t *testing.T) {
 	// Store multiple entries
 	for i := range 10 {
 		key := string(rune('a' + i))
-		if err := dp.Store(ctx, key, i, time.Time{}); err != nil {
+		if err := dp.Set(ctx, key, i, time.Time{}); err != nil {
 			t.Fatalf("Store %s: %v", key, err)
 		}
 	}
@@ -607,12 +607,12 @@ func TestDatastorePersist_Mock_Load_DecodeError(t *testing.T) {
 	ctx := context.Background()
 
 	// Store a value
-	if err := dp.Store(ctx, "key1", 42, time.Time{}); err != nil {
+	if err := dp.Set(ctx, "key1", 42, time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
 	// Load it back
-	val, _, found, err := dp.Load(ctx, "key1")
+	val, _, found, err := dp.Get(ctx, "key1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -634,16 +634,16 @@ func TestDatastorePersist_Mock_LoadRecent_SkipExpired(t *testing.T) {
 	past := time.Now().Add(-1 * time.Hour)
 	future := time.Now().Add(1 * time.Hour)
 
-	if err := dp.Store(ctx, "expired1", 1, past); err != nil {
+	if err := dp.Set(ctx, "expired1", 1, past); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if err := dp.Store(ctx, "expired2", 2, past); err != nil {
+	if err := dp.Set(ctx, "expired2", 2, past); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if err := dp.Store(ctx, "valid1", 3, future); err != nil {
+	if err := dp.Set(ctx, "valid1", 3, future); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if err := dp.Store(ctx, "valid2", 4, future); err != nil {
+	if err := dp.Set(ctx, "valid2", 4, future); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
@@ -693,14 +693,14 @@ func TestDatastorePersist_Mock_StoreLoadCycle(t *testing.T) {
 
 	// Store all
 	for _, tt := range tests {
-		if err := dp.Store(ctx, tt.key, tt.value, tt.expiry); err != nil {
+		if err := dp.Set(ctx, tt.key, tt.value, tt.expiry); err != nil {
 			t.Fatalf("Store %s: %v", tt.key, err)
 		}
 	}
 
 	// Load all
 	for _, tt := range tests {
-		val, expiry, found, err := dp.Load(ctx, tt.key)
+		val, expiry, found, err := dp.Get(ctx, tt.key)
 		if err != nil {
 			t.Fatalf("Load %s: %v", tt.key, err)
 		}
@@ -735,11 +735,11 @@ func TestDatastorePersist_Mock_MultipleOps(t *testing.T) {
 	ctx := context.Background()
 
 	// Test sequence: Store, Load, Update, Load, Delete, Load
-	if err := dp.Store(ctx, "key", 1, time.Time{}); err != nil {
+	if err := dp.Set(ctx, "key", 1, time.Time{}); err != nil {
 		t.Fatalf("Store 1: %v", err)
 	}
 
-	val, _, found, err := dp.Load(ctx, "key")
+	val, _, found, err := dp.Get(ctx, "key")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -747,11 +747,11 @@ func TestDatastorePersist_Mock_MultipleOps(t *testing.T) {
 		t.Error("After Store 1: key should be 1")
 	}
 
-	if err := dp.Store(ctx, "key", 2, time.Time{}); err != nil {
+	if err := dp.Set(ctx, "key", 2, time.Time{}); err != nil {
 		t.Fatalf("Store 2: %v", err)
 	}
 
-	val, _, found, err = dp.Load(ctx, "key")
+	val, _, found, err = dp.Get(ctx, "key")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -763,7 +763,7 @@ func TestDatastorePersist_Mock_MultipleOps(t *testing.T) {
 		t.Fatalf("Delete: %v", err)
 	}
 
-	_, _, found, err = dp.Load(ctx, "key")
+	_, _, found, err = dp.Get(ctx, "key")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -781,7 +781,7 @@ func TestDatastorePersist_Mock_Flush(t *testing.T) {
 	// Store multiple entries
 	for i := range 10 {
 		key := fmt.Sprintf("key%d", i)
-		if err := dp.Store(ctx, key, i*100, time.Time{}); err != nil {
+		if err := dp.Set(ctx, key, i*100, time.Time{}); err != nil {
 			t.Fatalf("Store %s: %v", key, err)
 		}
 	}
@@ -789,7 +789,7 @@ func TestDatastorePersist_Mock_Flush(t *testing.T) {
 	// Verify entries exist
 	for i := range 10 {
 		key := fmt.Sprintf("key%d", i)
-		if _, _, found, err := dp.Load(ctx, key); err != nil || !found {
+		if _, _, found, err := dp.Get(ctx, key); err != nil || !found {
 			t.Fatalf("%s should exist before flush", key)
 		}
 	}
@@ -806,7 +806,7 @@ func TestDatastorePersist_Mock_Flush(t *testing.T) {
 	// All entries should be gone
 	for i := range 10 {
 		key := fmt.Sprintf("key%d", i)
-		if _, _, found, err := dp.Load(ctx, key); err != nil {
+		if _, _, found, err := dp.Get(ctx, key); err != nil {
 			t.Fatalf("Load: %v", err)
 		} else if found {
 			t.Errorf("%s should not exist after flush", key)

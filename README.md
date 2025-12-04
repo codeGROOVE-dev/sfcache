@@ -17,10 +17,10 @@ Designed for persistently caching API requests in an unreliable environment, thi
 - **Faster than a bat out of hell** - Best-in-class latency and throughput
 - **S3-FIFO eviction** - Better hit-rates than LRU ([learn more](https://s3fifo.com/))
 - **L2 Persistence (optional)** - Bring your own database or use built-in backends:
-  - [`persist/localfs`](persist/localfs) - Local files (gob encoding, zero dependencies)
-  - [`persist/datastore`](persist/datastore) - Google Cloud Datastore
-  - [`persist/valkey`](persist/valkey) - Valkey/Redis
-  - [`persist/cloudrun`](persist/cloudrun) - Auto-detect Cloud Run
+  - [`pkg/persist/localfs`](pkg/persist/localfs) - Local files (gob encoding, zero dependencies)
+  - [`pkg/persist/datastore`](pkg/persist/datastore) - Google Cloud Datastore
+  - [`pkg/persist/valkey`](pkg/persist/valkey) - Valkey/Redis
+  - [`pkg/persist/cloudrun`](pkg/persist/cloudrun) - Auto-detect Cloud Run
 - **Per-item TTL** - Optional expiration
 - **Graceful degradation** - Cache works even if persistence fails
 - **Zero allocation reads** - minimal GC thrashing
@@ -44,7 +44,7 @@ or with local file persistence to survive restarts:
 ```go
 import (
   "github.com/codeGROOVE-dev/sfcache"
-  "github.com/codeGROOVE-dev/sfcache/persist/localfs"
+  "github.com/codeGROOVE-dev/sfcache/pkg/persist/localfs"
 )
 
 p, _ := localfs.New[string, User]("myapp", "")
@@ -57,6 +57,8 @@ cache.Store.Len(ctx)                  // Access persistence layer directly
 A persistent cache suitable for Cloud Run or local development; uses Cloud Datastore if available
 
 ```go
+import "github.com/codeGROOVE-dev/sfcache/pkg/persist/cloudrun"
+
 p, _ := cloudrun.New[string, User](ctx, "myapp")
 cache, _ := sfcache.Persistent[string, User](ctx, p)
 ```
@@ -68,36 +70,6 @@ sfcache prioritizes high hit-rates and low read latency, but it performs quite w
 Here's the results from an M4 MacBook Pro - run `make bench` to see the results for yourself:
 
 ```
->>> TestMetaTrace: Meta Trace Hit Rate (10M ops) (go test -run=TestMetaTrace -v)
-
-### Meta Trace Hit Rate (10M ops from Meta KVCache)
-
-| Cache         | 50K cache | 100K cache |
-|---------------|-----------|------------|
-| sfcache       |   68.19%  |   76.03%   |
-| otter         |   41.31%  |   55.41%   |
-| ristretto     |   40.33%  |   48.91%   |
-| tinylfu       |   53.70%  |   54.79%   |
-| freecache     |   56.86%  |   65.52%   |
-| lru           |   65.21%  |   74.22%   |
-
-- 🔥 Meta trace: 2.4% better than next best (lru)
-
->>> TestHitRate: Zipf Hit Rate (go test -run=TestHitRate -v)
-
-### Hit Rate (Zipf alpha=0.99, 1M ops, 1M keyspace)
-
-| Cache         | Size=1% | Size=2.5% | Size=5% |
-|---------------|---------|-----------|---------|
-| sfcache       |  64.19% |    69.23% |  72.50% |
-| otter         |  61.64% |    67.94% |  71.38% |
-| ristretto     |  34.88% |    41.25% |  46.62% |
-| tinylfu       |  63.83% |    68.25% |  71.56% |
-| freecache     |  56.65% |    57.75% |  63.39% |
-| lru           |  57.33% |    64.55% |  69.92% |
-
-- 🔥 Hit rate: 1.1% better than next best (tinylfu)
-
 >>> TestLatency: Single-Threaded Latency (go test -run=TestLatency -v)
 
 ### Single-Threaded Latency (sorted by Get)
@@ -143,6 +115,36 @@ Here's the results from an M4 MacBook Pro - run `make bench` to see the results 
 | tinylfu       |    4.25M   |
 
 - 🔥 Throughput: 187% faster than next best (freecache)
+
+>>> TestMetaTrace: Meta Trace Hit Rate (10M ops) (go test -run=TestMetaTrace -v)
+
+### Meta Trace Hit Rate (10M ops from Meta KVCache)
+
+| Cache         | 50K cache | 100K cache |
+|---------------|-----------|------------|
+| sfcache       |   68.19%  |   76.03%   |
+| otter         |   41.31%  |   55.41%   |
+| ristretto     |   40.33%  |   48.91%   |
+| tinylfu       |   53.70%  |   54.79%   |
+| freecache     |   56.86%  |   65.52%   |
+| lru           |   65.21%  |   74.22%   |
+
+- 🔥 Meta trace: 2.4% better than next best (lru)
+
+>>> TestHitRate: Zipf Hit Rate (go test -run=TestHitRate -v)
+
+### Hit Rate (Zipf alpha=0.99, 1M ops, 1M keyspace)
+
+| Cache         | Size=1% | Size=2.5% | Size=5% |
+|---------------|---------|-----------|---------|
+| sfcache       |  64.19% |    69.23% |  72.50% |
+| otter         |  61.64% |    67.94% |  71.38% |
+| ristretto     |  34.88% |    41.25% |  46.62% |
+| tinylfu       |  63.83% |    68.25% |  71.56% |
+| freecache     |  56.65% |    57.75% |  63.39% |
+| lru           |  57.33% |    64.55% |  69.92% |
+
+- 🔥 Hit rate: 1.1% better than next best (tinylfu)
 ```
 
 Cache performance is a game of balancing trade-offs. There will be workloads where other cache implementations are better, but nobody blends speed and persistence like we do.

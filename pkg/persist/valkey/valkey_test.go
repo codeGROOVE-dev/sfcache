@@ -142,12 +142,12 @@ func TestValkeyPersist_StoreLoad(t *testing.T) {
 	}()
 
 	// Store a value
-	if err := p.Store(ctx, "key1", 42, time.Time{}); err != nil {
+	if err := p.Set(ctx, "key1", 42, time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
 	// Load the value
-	val, expiry, found, err := p.Load(ctx, "key1")
+	val, expiry, found, err := p.Get(ctx, "key1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestValkeyPersist_LoadMissing(t *testing.T) {
 	}()
 
 	// Load non-existent key
-	_, _, found, err := p.Load(ctx, "missing-key-99999")
+	_, _, found, err := p.Get(ctx, "missing-key-99999")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -217,12 +217,12 @@ func TestValkeyPersist_TTL(t *testing.T) {
 
 	// Store with short TTL
 	expiry := time.Now().Add(1 * time.Second)
-	if err := p.Store(ctx, "expires-soon", "value", expiry); err != nil {
+	if err := p.Set(ctx, "expires-soon", "value", expiry); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
 	// Should be loadable immediately
-	val, loadedExpiry, found, err := p.Load(ctx, "expires-soon")
+	val, loadedExpiry, found, err := p.Get(ctx, "expires-soon")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestValkeyPersist_TTL(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Should not be loadable after expiration
-	_, _, found, err = p.Load(ctx, "expires-soon")
+	_, _, found, err = p.Get(ctx, "expires-soon")
 	if err != nil {
 		t.Fatalf("Load after expiry: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestValkeyPersist_Delete(t *testing.T) {
 	}()
 
 	// Store and delete
-	if err := p.Store(ctx, "key1", 42, time.Time{}); err != nil {
+	if err := p.Set(ctx, "key1", 42, time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
@@ -278,7 +278,7 @@ func TestValkeyPersist_Delete(t *testing.T) {
 	}
 
 	// Should not be loadable
-	_, _, found, err := p.Load(ctx, "key1")
+	_, _, found, err := p.Get(ctx, "key1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -312,17 +312,17 @@ func TestValkeyPersist_Update(t *testing.T) {
 	}()
 
 	// Store initial value
-	if err := p.Store(ctx, "key", "value1", time.Time{}); err != nil {
+	if err := p.Set(ctx, "key", "value1", time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
 	// Update value
-	if err := p.Store(ctx, "key", "value2", time.Time{}); err != nil {
+	if err := p.Set(ctx, "key", "value2", time.Time{}); err != nil {
 		t.Fatalf("Store update: %v", err)
 	}
 
 	// Load and verify updated value
-	val, _, found, err := p.Load(ctx, "key")
+	val, _, found, err := p.Get(ctx, "key")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -371,12 +371,12 @@ func TestValkeyPersist_ComplexValue(t *testing.T) {
 	}
 
 	// Store complex value
-	if err := p.Store(ctx, "user1", user, time.Time{}); err != nil {
+	if err := p.Set(ctx, "user1", user, time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
 	// Load and verify
-	loaded, _, found, err := p.Load(ctx, "user1")
+	loaded, _, found, err := p.Get(ctx, "user1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestValkeyPersist_LoadRecent(t *testing.T) {
 		"key3": 3,
 	}
 	for k, v := range entries {
-		if err := p.Store(ctx, k, v, time.Time{}); err != nil {
+		if err := p.Set(ctx, k, v, time.Time{}); err != nil {
 			t.Fatalf("Store %s: %v", k, err)
 		}
 	}
@@ -517,7 +517,7 @@ func TestValkeyPersist_ConcurrentAccess(t *testing.T) {
 			for j := range numOpsPerGoroutine {
 				key := fmt.Sprintf("key-%d-%d", id, j)
 				value := id*1000 + j
-				if err := p.Store(ctx, key, value, time.Time{}); err != nil {
+				if err := p.Set(ctx, key, value, time.Time{}); err != nil {
 					errCh <- fmt.Errorf("store %s: %w", key, err)
 					return
 				}
@@ -541,7 +541,7 @@ func TestValkeyPersist_ConcurrentAccess(t *testing.T) {
 			for j := range numOpsPerGoroutine {
 				key := fmt.Sprintf("key-%d-%d", id, j)
 				expectedValue := id*1000 + j
-				val, _, found, err := p.Load(ctx, key)
+				val, _, found, err := p.Get(ctx, key)
 				if err != nil {
 					readErrCh <- fmt.Errorf("load %s: %w", key, err)
 					return
@@ -603,11 +603,11 @@ func TestValkeyPersist_LargeValue(t *testing.T) {
 		largeValue[i] = byte(i % 256)
 	}
 
-	if err := p.Store(ctx, "large-key", largeValue, time.Time{}); err != nil {
+	if err := p.Set(ctx, "large-key", largeValue, time.Time{}); err != nil {
 		t.Fatalf("Store large value: %v", err)
 	}
 
-	loaded, _, found, err := p.Load(ctx, "large-key")
+	loaded, _, found, err := p.Get(ctx, "large-key")
 	if err != nil {
 		t.Fatalf("Load large value: %v", err)
 	}
@@ -666,13 +666,13 @@ func TestValkeyPersist_SpecialCharacters(t *testing.T) {
 
 	for _, tt := range tests {
 		// Store
-		if err := p.Store(ctx, tt.key, tt.value, time.Time{}); err != nil {
+		if err := p.Set(ctx, tt.key, tt.value, time.Time{}); err != nil {
 			t.Errorf("Store key=%s: %v", tt.key, err)
 			continue
 		}
 
 		// Load and verify
-		val, _, found, err := p.Load(ctx, tt.key)
+		val, _, found, err := p.Get(ctx, tt.key)
 		if err != nil {
 			t.Errorf("Load key=%s: %v", tt.key, err)
 			continue
@@ -714,7 +714,7 @@ func TestValkeyPersist_ContextCancellation(t *testing.T) {
 	// Store some data first
 	for i := range 100 {
 		key := fmt.Sprintf("cancel-key-%d", i)
-		if err := p.Store(ctx, key, i, time.Time{}); err != nil {
+		if err := p.Set(ctx, key, i, time.Time{}); err != nil {
 			t.Fatalf("Store: %v", err)
 		}
 	}
@@ -772,11 +772,11 @@ func TestValkeyPersist_EmptyValues(t *testing.T) {
 	}()
 
 	// Store empty string
-	if err := p.Store(ctx, "empty-key", "", time.Time{}); err != nil {
+	if err := p.Set(ctx, "empty-key", "", time.Time{}); err != nil {
 		t.Fatalf("Store empty value: %v", err)
 	}
 
-	val, _, found, err := p.Load(ctx, "empty-key")
+	val, _, found, err := p.Get(ctx, "empty-key")
 	if err != nil {
 		t.Fatalf("Load empty value: %v", err)
 	}
@@ -862,7 +862,7 @@ func TestValkeyPersist_LoadRecentWithLimit(t *testing.T) {
 	// Store 10 entries
 	for i := range 10 {
 		key := fmt.Sprintf("limit-key-%d", i)
-		if err := p.Store(ctx, key, i, time.Time{}); err != nil {
+		if err := p.Set(ctx, key, i, time.Time{}); err != nil {
 			t.Fatalf("Store %s: %v", key, err)
 		}
 	}
@@ -965,7 +965,7 @@ func TestValkeyPersist_Flush(t *testing.T) {
 	// Store 10 entries
 	for i := range 10 {
 		key := fmt.Sprintf("flush-key-%d", i)
-		if err := p.Store(ctx, key, i*100, time.Time{}); err != nil {
+		if err := p.Set(ctx, key, i*100, time.Time{}); err != nil {
 			t.Fatalf("Store %s: %v", key, err)
 		}
 	}
@@ -973,7 +973,7 @@ func TestValkeyPersist_Flush(t *testing.T) {
 	// Verify entries exist
 	for i := range 10 {
 		key := fmt.Sprintf("flush-key-%d", i)
-		if _, _, found, err := p.Load(ctx, key); err != nil || !found {
+		if _, _, found, err := p.Get(ctx, key); err != nil || !found {
 			t.Fatalf("%s should exist before flush", key)
 		}
 	}
@@ -990,7 +990,7 @@ func TestValkeyPersist_Flush(t *testing.T) {
 	// All entries should be gone
 	for i := range 10 {
 		key := fmt.Sprintf("flush-key-%d", i)
-		if _, _, found, err := p.Load(ctx, key); err != nil {
+		if _, _, found, err := p.Get(ctx, key); err != nil {
 			t.Fatalf("Load: %v", err)
 		} else if found {
 			t.Errorf("%s should not exist after flush", key)

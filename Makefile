@@ -13,11 +13,11 @@ bench:
 	go test -bench=. -benchmem
 
 # Run the 5 key benchmarks (~3-5min):
-# 1. Meta Trace Hit Rate (real-world)
-# 2. Zipf Hit Rate (synthetic)
-# 3. Single-Threaded Latency
-# 4. Zipf Throughput (1 thread)
-# 5. Zipf Throughput (16 threads)
+# 1. Single-Threaded Latency
+# 2. Zipf Throughput (1 thread)
+# 3. Zipf Throughput (16 threads)
+# 4. Meta Trace Hit Rate (real-world)
+# 5. Zipf Hit Rate (synthetic)
 benchmark:
 	@echo "=== sfcache Benchmark Suite ==="
 	@cd benchmarks && go test -run=TestBenchmarkSuite -v -timeout=300s

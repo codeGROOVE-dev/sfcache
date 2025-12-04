@@ -40,7 +40,7 @@ func Memory[K comparable, V any](opts ...Option) *MemoryCache[K, V] {
 // Get retrieves a value from the cache.
 // Returns the value and true if found, or the zero value and false if not found.
 func (c *MemoryCache[K, V]) Get(key K) (V, bool) {
-	return c.memory.getFromMemory(key)
+	return c.memory.get(key)
 }
 
 // GetOrSet retrieves a value from the cache, or computes and stores it if not found.
@@ -49,7 +49,7 @@ func (c *MemoryCache[K, V]) Get(key K) (V, bool) {
 // This is optimized to perform a single shard lookup and lock acquisition.
 func (c *MemoryCache[K, V]) GetOrSet(key K, loader func() V, ttl ...time.Duration) V {
 	// We can't use the optimized path with a loader since we'd hold the lock during loader()
-	if val, ok := c.memory.getFromMemory(key); ok {
+	if val, ok := c.memory.get(key); ok {
 		return val
 	}
 	val := loader()
@@ -65,34 +65,34 @@ func (c *MemoryCache[K, V]) SetIfAbsent(key K, value V, ttl ...time.Duration) (V
 	if len(ttl) > 0 {
 		t = ttl[0]
 	}
-	return c.memory.getOrSetMemory(key, value, timeToNano(c.expiry(t)))
+	return c.memory.getOrSet(key, value, timeToNano(c.expiry(t)))
 }
 
 // Set stores a value in the cache.
 // If no TTL is provided, the default TTL is used.
-// If no default TTL is configured, the item never expires.
+// If no default TTL is configured, the entry never expires.
 func (c *MemoryCache[K, V]) Set(key K, value V, ttl ...time.Duration) {
 	var t time.Duration
 	if len(ttl) > 0 {
 		t = ttl[0]
 	}
-	c.memory.setToMemory(key, value, timeToNano(c.expiry(t)))
+	c.memory.set(key, value, timeToNano(c.expiry(t)))
 }
 
 // Delete removes a value from the cache.
 func (c *MemoryCache[K, V]) Delete(key K) {
-	c.memory.deleteFromMemory(key)
+	c.memory.del(key)
 }
 
-// Len returns the number of items in the cache.
+// Len returns the number of entries in the cache.
 func (c *MemoryCache[K, V]) Len() int {
-	return c.memory.memoryLen()
+	return c.memory.len()
 }
 
 // Flush removes all entries from the cache.
 // Returns the number of entries removed.
 func (c *MemoryCache[K, V]) Flush() int {
-	return c.memory.flushMemory()
+	return c.memory.flush()
 }
 
 // Close releases resources held by the cache.
@@ -132,7 +132,7 @@ func defaultConfig() *config {
 // Option configures a MemoryCache or PersistentCache.
 type Option func(*config)
 
-// WithSize sets the maximum number of items in the memory cache.
+// WithSize sets the maximum number of entries in the memory cache.
 func WithSize(n int) Option {
 	return func(c *config) {
 		c.size = n
@@ -155,8 +155,8 @@ func WithGhostRatio(r float64) Option {
 	}
 }
 
-// WithTTL sets the default TTL for cache items.
-// Items without an explicit TTL will use this value.
+// WithTTL sets the default TTL for cache entries.
+// Entries without an explicit TTL will use this value.
 func WithTTL(d time.Duration) Option {
 	return func(c *config) {
 		c.defaultTTL = d

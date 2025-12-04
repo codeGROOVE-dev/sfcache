@@ -44,10 +44,10 @@ func (p *persister[K, V]) Location(key K) string {
 	return fmt.Sprintf("%s/%v", p.kind, key)
 }
 
-// datastoreEntry represents a cache entry in Datastore.
+// entry represents a cache entry in Datastore.
 // We use base64-encoded string for Value to avoid datastore []byte limitations.
 // The key is stored in the Datastore entity key itself.
-type datastoreEntry struct {
+type entry struct {
 	Expiry    time.Time `datastore:"expiry,omitempty,noindex"`
 	UpdatedAt time.Time `datastore:"updated_at"`
 	Value     string    `datastore:"value,noindex"`
@@ -56,7 +56,7 @@ type datastoreEntry struct {
 // New creates a new Datastore-based persistence layer.
 // The cacheID is used as the Datastore database name.
 // An empty projectID will be auto-detected from the environment.
-func New[K comparable, V any](ctx context.Context, cacheID string) (persist.Layer[K, V], error) {
+func New[K comparable, V any](ctx context.Context, cacheID string) (persist.Store[K, V], error) {
 	// Empty project ID lets ds9 auto-detect
 	client, err := ds.NewClientWithDatabase(ctx, "", cacheID)
 	if err != nil {
@@ -78,15 +78,15 @@ func (p *persister[K, V]) makeKey(key K) *ds.Key {
 	return ds.NameKey(p.kind, fmt.Sprintf("%v", key), nil)
 }
 
-// Load retrieves a value from Datastore.
+// Get retrieves a value from Datastore.
 //
-//nolint:revive // function-result-limit - required by PersistenceLayer interface
-func (p *persister[K, V]) Load(ctx context.Context, key K) (value V, expiry time.Time, found bool, err error) {
+//nolint:revive // function-result-limit - required by persist.Store interface
+func (p *persister[K, V]) Get(ctx context.Context, key K) (value V, expiry time.Time, found bool, err error) {
 	var zero V
 	dsKey := p.makeKey(key)
 
-	var entry datastoreEntry
-	if err := p.client.Get(ctx, dsKey, &entry); err != nil {
+	var e entry
+	if err := p.client.Get(ctx, dsKey, &e); err != nil {
 		if errors.Is(err, ds.ErrNoSuchEntity) {
 			return zero, time.Time{}, false, nil
 		}
@@ -95,12 +95,12 @@ func (p *persister[K, V]) Load(ctx context.Context, key K) (value V, expiry time
 
 	// Check expiration - return miss but don't delete
 	// Cleanup is handled by native Datastore TTL or periodic Cleanup() calls
-	if !entry.Expiry.IsZero() && time.Now().After(entry.Expiry) {
+	if !e.Expiry.IsZero() && time.Now().After(e.Expiry) {
 		return zero, time.Time{}, false, nil
 	}
 
 	// Decode from base64
-	vb, err := base64.StdEncoding.DecodeString(entry.Value)
+	vb, err := base64.StdEncoding.DecodeString(e.Value)
 	if err != nil {
 		return zero, time.Time{}, false, fmt.Errorf("decode base64: %w", err)
 	}
@@ -110,11 +110,11 @@ func (p *persister[K, V]) Load(ctx context.Context, key K) (value V, expiry time
 		return zero, time.Time{}, false, fmt.Errorf("unmarshal value: %w", err)
 	}
 
-	return value, entry.Expiry, true, nil
+	return value, e.Expiry, true, nil
 }
 
-// Store saves a value to Datastore.
-func (p *persister[K, V]) Store(ctx context.Context, key K, value V, expiry time.Time) error {
+// Set saves a value to Datastore.
+func (p *persister[K, V]) Set(ctx context.Context, key K, value V, expiry time.Time) error {
 	dsKey := p.makeKey(key)
 
 	// Encode value as JSON then base64
@@ -124,13 +124,13 @@ func (p *persister[K, V]) Store(ctx context.Context, key K, value V, expiry time
 	}
 	vs := base64.StdEncoding.EncodeToString(vb)
 
-	entry := datastoreEntry{
+	e := entry{
 		Value:     vs,
 		Expiry:    expiry,
 		UpdatedAt: time.Now(),
 	}
 
-	if _, err := p.client.Put(ctx, dsKey, &entry); err != nil {
+	if _, err := p.client.Put(ctx, dsKey, &e); err != nil {
 		return fmt.Errorf("datastore put: %w", err)
 	}
 
@@ -167,8 +167,8 @@ func (p *persister[K, V]) LoadRecent(ctx context.Context, limit int) (entries <-
 		now := time.Now()
 
 		for {
-			var entry datastoreEntry
-			dsKey, err := iter.Next(&entry)
+			var e entry
+			dsKey, err := iter.Next(&e)
 			if errors.Is(err, ds.Done) {
 				break
 			}
@@ -186,7 +186,7 @@ func (p *persister[K, V]) LoadRecent(ctx context.Context, limit int) (entries <-
 			}
 
 			// Skip expired entries - cleanup is handled by native TTL or periodic Cleanup() calls
-			if !entry.Expiry.IsZero() && now.After(entry.Expiry) {
+			if !e.Expiry.IsZero() && now.After(e.Expiry) {
 				continue
 			}
 
@@ -205,7 +205,7 @@ func (p *persister[K, V]) LoadRecent(ctx context.Context, limit int) (entries <-
 			}
 
 			// Decode value from base64
-			vb, err := base64.StdEncoding.DecodeString(entry.Value)
+			vb, err := base64.StdEncoding.DecodeString(e.Value)
 			if err != nil {
 				continue
 			}
@@ -218,8 +218,8 @@ func (p *persister[K, V]) LoadRecent(ctx context.Context, limit int) (entries <-
 			entryCh <- persist.Entry[K, V]{
 				Key:       key,
 				Value:     value,
-				Expiry:    entry.Expiry,
-				UpdatedAt: entry.UpdatedAt,
+				Expiry:    e.Expiry,
+				UpdatedAt: e.UpdatedAt,
 			}
 		}
 	}()
@@ -240,7 +240,7 @@ func (p *persister[K, V]) Cleanup(ctx context.Context, maxAge time.Duration) (in
 		Filter("expiry <", cutoff).
 		KeysOnly()
 
-	var entries []datastoreEntry
+	var entries []entry
 	keys, err := p.client.GetAll(ctx, query, &entries)
 	if err != nil {
 		return 0, fmt.Errorf("query expired entries: %w", err)
@@ -264,7 +264,7 @@ func (p *persister[K, V]) Flush(ctx context.Context) (int, error) {
 	// Query for all keys
 	query := ds.NewQuery(p.kind).KeysOnly()
 
-	var entries []datastoreEntry
+	var entries []entry
 	keys, err := p.client.GetAll(ctx, query, &entries)
 	if err != nil {
 		return 0, fmt.Errorf("query all entries: %w", err)

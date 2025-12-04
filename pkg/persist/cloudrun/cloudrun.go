@@ -19,7 +19,7 @@ import (
 //
 // The cacheID is used as the database name for Datastore or subdirectory for local files.
 // This function always succeeds by falling back to local files if Datastore is unavailable.
-func New[K comparable, V any](ctx context.Context, cacheID string) (persist.Layer[K, V], error) {
+func New[K comparable, V any](ctx context.Context, cacheID string) (persist.Store[K, V], error) {
 	// Try Datastore in Cloud Run environments
 	if os.Getenv("K_SERVICE") != "" {
 		p, err := datastore.New[K, V](ctx, cacheID)

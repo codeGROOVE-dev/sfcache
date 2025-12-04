@@ -11,25 +11,25 @@ func TestS3FIFO_BasicOperations(t *testing.T) {
 	cache := newS3FIFO[string, int](&config{size: 100, smallRatio: 0.1, ghostRatio: 1.0})
 
 	// Test set and get
-	cache.setToMemory("key1", 42, 0)
-	if val, ok := cache.getFromMemory("key1"); !ok || val != 42 {
+	cache.set("key1", 42, 0)
+	if val, ok := cache.get("key1"); !ok || val != 42 {
 		t.Errorf("get(key1) = %v, %v; want 42, true", val, ok)
 	}
 
 	// Test missing key
-	if val, ok := cache.getFromMemory("missing"); ok {
+	if val, ok := cache.get("missing"); ok {
 		t.Errorf("get(missing) = %v, %v; want _, false", val, ok)
 	}
 
 	// Test update
-	cache.setToMemory("key1", 100, 0)
-	if val, ok := cache.getFromMemory("key1"); !ok || val != 100 {
+	cache.set("key1", 100, 0)
+	if val, ok := cache.get("key1"); !ok || val != 100 {
 		t.Errorf("get(key1) after update = %v, %v; want 100, true", val, ok)
 	}
 
 	// Test delete
-	cache.deleteFromMemory("key1")
-	if val, ok := cache.getFromMemory("key1"); ok {
+	cache.del("key1")
+	if val, ok := cache.get("key1"); ok {
 		t.Errorf("get(key1) after delete = %v, %v; want _, false", val, ok)
 	}
 }
@@ -39,13 +39,13 @@ func TestS3FIFO_Capacity(t *testing.T) {
 
 	// Fill cache well beyond capacity
 	for i := range 30000 {
-		cache.setToMemory(i, "value", 0)
+		cache.set(i, "value", 0)
 	}
 
 	// Cache should be at or near requested capacity
 	// Allow up to 10% variance due to shard rounding
-	if cache.memoryLen() < 18000 || cache.memoryLen() > 22000 {
-		t.Errorf("cache length = %d; want ~20000 (±10%%)", cache.memoryLen())
+	if cache.len() < 18000 || cache.len() > 22000 {
+		t.Errorf("cache length = %d; want ~20000 (±10%%)", cache.len())
 	}
 }
 
@@ -69,10 +69,10 @@ func TestS3FIFO_CapacityAccuracy(t *testing.T) {
 
 			// Insert many more items than capacity
 			for i := range tc.requested * 3 {
-				cache.setToMemory(i, i, 0)
+				cache.set(i, i, 0)
 			}
 
-			actual := cache.memoryLen()
+			actual := cache.len()
 			if actual > tc.maxActual {
 				t.Errorf("requested %d, got %d items (max expected %d)",
 					tc.requested, actual, tc.maxActual)
@@ -92,25 +92,25 @@ func TestS3FIFO_Eviction(t *testing.T) {
 
 	// Fill cache to capacity
 	for i := range 10000 {
-		cache.setToMemory(i, i, 0)
+		cache.set(i, i, 0)
 	}
 
 	// Access item 0 to mark it for promotion
-	cache.getFromMemory(0)
+	cache.get(0)
 
 	// Add more items to trigger evictions - item 0 should survive
 	for i := 10000; i < 15000; i++ {
-		cache.setToMemory(i, i, 0)
+		cache.set(i, i, 0)
 	}
 
 	// Item 0 should still exist (it was accessed before evictions)
-	if _, ok := cache.getFromMemory(0); !ok {
+	if _, ok := cache.get(0); !ok {
 		t.Error("item 0 was evicted but should have been promoted")
 	}
 
 	// Should be near capacity (allow 10% variance)
-	if cache.memoryLen() < 9000 || cache.memoryLen() > 11000 {
-		t.Errorf("cache length = %d; want ~10000", cache.memoryLen())
+	if cache.len() < 9000 || cache.len() > 11000 {
+		t.Errorf("cache length = %d; want ~10000", cache.len())
 	}
 }
 
@@ -118,18 +118,18 @@ func TestS3FIFO_GhostQueue(t *testing.T) {
 	cache := newS3FIFO[string, int](&config{size: 12, smallRatio: 0.1, ghostRatio: 1.0})
 
 	// Fill one shard's worth
-	cache.setToMemory("a", 1, 0)
-	cache.setToMemory("b", 2, 0)
-	cache.setToMemory("c", 3, 0)
+	cache.set("a", 1, 0)
+	cache.set("b", 2, 0)
+	cache.set("c", 3, 0)
 
 	// Evict "a" by adding "d" (assuming same shard)
-	cache.setToMemory("d", 4, 0)
+	cache.set("d", 4, 0)
 
 	// Re-add "a" - should go directly to main queue if it was in ghost
-	cache.setToMemory("a", 10, 0)
+	cache.set("a", 10, 0)
 
 	// Verify "a" is retrievable with updated value
-	if val, ok := cache.getFromMemory("a"); !ok || val != 10 {
+	if val, ok := cache.get("a"); !ok || val != 10 {
 		t.Errorf("get(a) = %v, %v; want 10, true", val, ok)
 	}
 }
@@ -139,19 +139,19 @@ func TestS3FIFO_TTL(t *testing.T) {
 
 	// Set item with past expiry
 	past := time.Now().Add(-1 * time.Second).UnixNano()
-	cache.setToMemory("expired", 42, past)
+	cache.set("expired", 42, past)
 
 	// Should not be retrievable
-	if val, ok := cache.getFromMemory("expired"); ok {
+	if val, ok := cache.get("expired"); ok {
 		t.Errorf("get(expired) = %v, %v; want _, false", val, ok)
 	}
 
 	// Set item with future expiry
 	future := time.Now().Add(1 * time.Hour).UnixNano()
-	cache.setToMemory("valid", 100, future)
+	cache.set("valid", 100, future)
 
 	// Should be retrievable
-	if val, ok := cache.getFromMemory("valid"); !ok || val != 100 {
+	if val, ok := cache.get("valid"); !ok || val != 100 {
 		t.Errorf("get(valid) = %v, %v; want 100, true", val, ok)
 	}
 }
@@ -166,7 +166,7 @@ func TestS3FIFO_Concurrent(t *testing.T) {
 		go func(offset int) {
 			defer wg.Done()
 			for j := range 100 {
-				cache.setToMemory(offset*100+j, j, 0)
+				cache.set(offset*100+j, j, 0)
 			}
 		}(i)
 	}
@@ -177,7 +177,7 @@ func TestS3FIFO_Concurrent(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := range 100 {
-				cache.getFromMemory(j)
+				cache.get(j)
 			}
 		}()
 	}
@@ -185,8 +185,8 @@ func TestS3FIFO_Concurrent(t *testing.T) {
 	wg.Wait()
 
 	// Cache should be at or below requested capacity (with some shard rounding tolerance)
-	if cache.memoryLen() > 1100 {
-		t.Errorf("cache length = %d; want <= ~1000", cache.memoryLen())
+	if cache.len() > 1100 {
+		t.Errorf("cache length = %d; want <= ~1000", cache.len())
 	}
 }
 
@@ -197,24 +197,24 @@ func TestS3FIFO_FrequencyPromotion(t *testing.T) {
 
 	// Fill cache with items using int keys for predictable sharding
 	for i := range 10000 {
-		cache.setToMemory(i, i, 0)
+		cache.set(i, i, 0)
 	}
 
 	// Access even-numbered keys to increase their frequency
 	for i := 0; i < 10000; i += 2 {
-		cache.getFromMemory(i)
+		cache.get(i)
 	}
 
 	// Add more items to trigger evictions
 	for i := 10000; i < 15000; i++ {
-		cache.setToMemory(i, i, 0)
+		cache.set(i, i, 0)
 	}
 
 	// Count how many accessed items survived vs unaccessed
 	accessedSurvived := 0
 	unaccesedSurvived := 0
 	for i := range 10000 {
-		if _, ok := cache.getFromMemory(i); ok {
+		if _, ok := cache.get(i); ok {
 			if i%2 == 0 {
 				accessedSurvived++
 			} else {
@@ -236,26 +236,26 @@ func TestS3FIFO_SmallCapacity(t *testing.T) {
 	cache := newS3FIFO[string, int](&config{size: 12, smallRatio: 0.1, ghostRatio: 1.0})
 
 	// Fill to capacity
-	cache.setToMemory("a", 1, 0)
-	cache.setToMemory("b", 2, 0)
-	cache.setToMemory("c", 3, 0)
+	cache.set("a", 1, 0)
+	cache.set("b", 2, 0)
+	cache.set("c", 3, 0)
 
-	initialLen := cache.memoryLen()
+	initialLen := cache.len()
 
 	// Adding fourth item should trigger eviction in its shard
-	cache.setToMemory("d", 4, 0)
+	cache.set("d", 4, 0)
 
 	// Should still be at or near capacity
-	if cache.memoryLen() > 12 {
-		t.Errorf("cache length after eviction = %d; want <= 12", cache.memoryLen())
+	if cache.len() > 12 {
+		t.Errorf("cache length after eviction = %d; want <= 12", cache.len())
 	}
 
 	// Newest item should exist
-	if val, ok := cache.getFromMemory("d"); !ok || val != 4 {
+	if val, ok := cache.get("d"); !ok || val != 4 {
 		t.Errorf("get(d) = %v, %v; want 4, true", val, ok)
 	}
 
-	t.Logf("Initial len: %d, Final len: %d", initialLen, cache.memoryLen())
+	t.Logf("Initial len: %d, Final len: %d", initialLen, cache.len())
 }
 
 func BenchmarkS3FIFO_Set(b *testing.B) {
@@ -263,33 +263,33 @@ func BenchmarkS3FIFO_Set(b *testing.B) {
 	b.ResetTimer()
 
 	for i := range b.N {
-		cache.setToMemory(i%10000, i, 0)
+		cache.set(i%10000, i, 0)
 	}
 }
 
 func BenchmarkS3FIFO_Get(b *testing.B) {
 	cache := newS3FIFO[int, int](&config{size: 10000, smallRatio: 0.1, ghostRatio: 1.0})
 	for i := range 10000 {
-		cache.setToMemory(i, i, 0)
+		cache.set(i, i, 0)
 	}
 	b.ResetTimer()
 
 	for i := range b.N {
-		cache.getFromMemory(i % 10000)
+		cache.get(i % 10000)
 	}
 }
 
 func BenchmarkS3FIFO_GetParallel(b *testing.B) {
 	cache := newS3FIFO[int, int](&config{size: 10000, smallRatio: 0.1, ghostRatio: 1.0})
 	for i := range 10000 {
-		cache.setToMemory(i, i, 0)
+		cache.set(i, i, 0)
 	}
 	b.ResetTimer()
 
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			cache.getFromMemory(i % 10000)
+			cache.get(i % 10000)
 			i++
 		}
 	})
@@ -301,9 +301,9 @@ func BenchmarkS3FIFO_Mixed(b *testing.B) {
 
 	for i := range b.N {
 		if i%2 == 0 {
-			cache.setToMemory(i%10000, i, 0)
+			cache.set(i%10000, i, 0)
 		} else {
-			cache.getFromMemory(i % 10000)
+			cache.get(i % 10000)
 		}
 	}
 }
@@ -419,39 +419,39 @@ func TestS3FIFO_Flush(t *testing.T) {
 
 	// Add some items (fewer than capacity to avoid eviction)
 	for i := range 100 {
-		cache.setToMemory(i, i, 0)
+		cache.set(i, i, 0)
 	}
 
 	// Access some to promote to main queue
 	for i := range 20 {
-		cache.getFromMemory(i)
+		cache.get(i)
 	}
 
-	if cache.memoryLen() != 100 {
-		t.Errorf("cache length = %d; want 100", cache.memoryLen())
+	if cache.len() != 100 {
+		t.Errorf("cache length = %d; want 100", cache.len())
 	}
 
 	// Flush
-	removed := cache.flushMemory()
+	removed := cache.flush()
 	if removed != 100 {
 		t.Errorf("flushMemory removed %d items; want 100", removed)
 	}
 
 	// Cache should be empty
-	if cache.memoryLen() != 0 {
-		t.Errorf("cache length after flush = %d; want 0", cache.memoryLen())
+	if cache.len() != 0 {
+		t.Errorf("cache length after flush = %d; want 0", cache.len())
 	}
 
 	// All keys should be gone
 	for i := range 100 {
-		if _, ok := cache.getFromMemory(i); ok {
+		if _, ok := cache.get(i); ok {
 			t.Errorf("key%d should not be found after flush", i)
 		}
 	}
 
 	// Can add new items after flush
-	cache.setToMemory(999, 999, 0)
-	if val, ok := cache.getFromMemory(999); !ok || val != 999 {
+	cache.set(999, 999, 0)
+	if val, ok := cache.get(999); !ok || val != 999 {
 		t.Errorf("get(999) = %v, %v; want 999, true", val, ok)
 	}
 }
@@ -460,7 +460,7 @@ func TestS3FIFO_FlushEmpty(t *testing.T) {
 	cache := newS3FIFO[string, int](&config{size: 100, smallRatio: 0.1, ghostRatio: 1.0})
 
 	// Flush empty cache
-	removed := cache.flushMemory()
+	removed := cache.flush()
 	if removed != 0 {
 		t.Errorf("flushMemory removed %d items; want 0", removed)
 	}
@@ -488,43 +488,43 @@ func TestS3FIFO_VariousKeyTypes(t *testing.T) {
 
 	t.Run("int", func(t *testing.T) {
 		cache := newS3FIFO[int, string](&config{size: 100, smallRatio: 0.1, ghostRatio: 1.0})
-		cache.setToMemory(42, "forty-two", 0)
-		cache.setToMemory(-1, "negative", 0)
-		cache.setToMemory(0, "zero", 0)
+		cache.set(42, "forty-two", 0)
+		cache.set(-1, "negative", 0)
+		cache.set(0, "zero", 0)
 
-		if v, ok := cache.getFromMemory(42); !ok || v != "forty-two" {
+		if v, ok := cache.get(42); !ok || v != "forty-two" {
 			t.Errorf("int key 42: got %v, %v", v, ok)
 		}
-		if v, ok := cache.getFromMemory(-1); !ok || v != "negative" {
+		if v, ok := cache.get(-1); !ok || v != "negative" {
 			t.Errorf("int key -1: got %v, %v", v, ok)
 		}
-		if v, ok := cache.getFromMemory(0); !ok || v != "zero" {
+		if v, ok := cache.get(0); !ok || v != "zero" {
 			t.Errorf("int key 0: got %v, %v", v, ok)
 		}
 	})
 
 	t.Run("int64", func(t *testing.T) {
 		cache := newS3FIFO[int64, string](&config{size: 100, smallRatio: 0.1, ghostRatio: 1.0})
-		cache.setToMemory(int64(1<<62), "large", 0)
-		cache.setToMemory(int64(-1), "negative", 0)
+		cache.set(int64(1<<62), "large", 0)
+		cache.set(int64(-1), "negative", 0)
 
-		if v, ok := cache.getFromMemory(int64(1 << 62)); !ok || v != "large" {
+		if v, ok := cache.get(int64(1 << 62)); !ok || v != "large" {
 			t.Errorf("int64 large key: got %v, %v", v, ok)
 		}
-		if v, ok := cache.getFromMemory(int64(-1)); !ok || v != "negative" {
+		if v, ok := cache.get(int64(-1)); !ok || v != "negative" {
 			t.Errorf("int64 -1 key: got %v, %v", v, ok)
 		}
 	})
 
 	t.Run("uint", func(t *testing.T) {
 		cache := newS3FIFO[uint, string](&config{size: 100, smallRatio: 0.1, ghostRatio: 1.0})
-		cache.setToMemory(uint(0), "zero", 0)
-		cache.setToMemory(uint(100), "hundred", 0)
+		cache.set(uint(0), "zero", 0)
+		cache.set(uint(100), "hundred", 0)
 
-		if v, ok := cache.getFromMemory(uint(0)); !ok || v != "zero" {
+		if v, ok := cache.get(uint(0)); !ok || v != "zero" {
 			t.Errorf("uint 0: got %v, %v", v, ok)
 		}
-		if v, ok := cache.getFromMemory(uint(100)); !ok || v != "hundred" {
+		if v, ok := cache.get(uint(100)); !ok || v != "hundred" {
 			t.Errorf("uint 100: got %v, %v", v, ok)
 		}
 	})
@@ -532,31 +532,31 @@ func TestS3FIFO_VariousKeyTypes(t *testing.T) {
 	t.Run("uint64", func(t *testing.T) {
 		// Use larger size to ensure per-shard capacity > 1 (2048 shards)
 		cache := newS3FIFO[uint64, string](&config{size: 10000, smallRatio: 0.1, ghostRatio: 1.0})
-		cache.setToMemory(uint64(1<<63), "large", 0)
-		cache.setToMemory(uint64(0), "zero", 0)
+		cache.set(uint64(1<<63), "large", 0)
+		cache.set(uint64(0), "zero", 0)
 
-		if v, ok := cache.getFromMemory(uint64(1 << 63)); !ok || v != "large" {
+		if v, ok := cache.get(uint64(1 << 63)); !ok || v != "large" {
 			t.Errorf("uint64 large: got %v, %v", v, ok)
 		}
-		if v, ok := cache.getFromMemory(uint64(0)); !ok || v != "zero" {
+		if v, ok := cache.get(uint64(0)); !ok || v != "zero" {
 			t.Errorf("uint64 0: got %v, %v", v, ok)
 		}
 	})
 
 	t.Run("string", func(t *testing.T) {
 		cache := newS3FIFO[string, int](&config{size: 100, smallRatio: 0.1, ghostRatio: 1.0})
-		cache.setToMemory("hello", 1, 0)
-		cache.setToMemory("", 2, 0) // empty string is valid
+		cache.set("hello", 1, 0)
+		cache.set("", 2, 0) // empty string is valid
 		unicode := "unicode-\u65e5\u672c\u8a9e"
-		cache.setToMemory(unicode, 3, 0)
+		cache.set(unicode, 3, 0)
 
-		if v, ok := cache.getFromMemory("hello"); !ok || v != 1 {
+		if v, ok := cache.get("hello"); !ok || v != 1 {
 			t.Errorf("string hello: got %v, %v", v, ok)
 		}
-		if v, ok := cache.getFromMemory(""); !ok || v != 2 {
+		if v, ok := cache.get(""); !ok || v != 2 {
 			t.Errorf("empty string: got %v, %v", v, ok)
 		}
-		if v, ok := cache.getFromMemory(unicode); !ok || v != 3 {
+		if v, ok := cache.get(unicode); !ok || v != 3 {
 			t.Errorf("unicode string: got %v, %v", v, ok)
 		}
 	})
@@ -568,23 +568,23 @@ func TestS3FIFO_VariousKeyTypes(t *testing.T) {
 		k2 := stringerKey{id: 2}
 		k3 := stringerKey{id: 999}
 
-		cache.setToMemory(k1, "one", 0)
-		cache.setToMemory(k2, "two", 0)
-		cache.setToMemory(k3, "many", 0)
+		cache.set(k1, "one", 0)
+		cache.set(k2, "two", 0)
+		cache.set(k3, "many", 0)
 
-		if v, ok := cache.getFromMemory(k1); !ok || v != "one" {
+		if v, ok := cache.get(k1); !ok || v != "one" {
 			t.Errorf("stringer k1: got %v, %v", v, ok)
 		}
-		if v, ok := cache.getFromMemory(k2); !ok || v != "two" {
+		if v, ok := cache.get(k2); !ok || v != "two" {
 			t.Errorf("stringer k2: got %v, %v", v, ok)
 		}
-		if v, ok := cache.getFromMemory(k3); !ok || v != "many" {
+		if v, ok := cache.get(k3); !ok || v != "many" {
 			t.Errorf("stringer k3: got %v, %v", v, ok)
 		}
 
 		// Verify delete works
-		cache.deleteFromMemory(k2)
-		if _, ok := cache.getFromMemory(k2); ok {
+		cache.del(k2)
+		if _, ok := cache.get(k2); ok {
 			t.Error("stringer k2 should be deleted")
 		}
 	})
@@ -597,23 +597,23 @@ func TestS3FIFO_VariousKeyTypes(t *testing.T) {
 		k2 := plainKey{a: 2, b: "two"}
 		k3 := plainKey{a: 1, b: "one"} // Same as k1
 
-		cache.setToMemory(k1, "first", 0)
-		cache.setToMemory(k2, "second", 0)
+		cache.set(k1, "first", 0)
+		cache.set(k2, "second", 0)
 
-		if v, ok := cache.getFromMemory(k1); !ok || v != "first" {
+		if v, ok := cache.get(k1); !ok || v != "first" {
 			t.Errorf("plain k1: got %v, %v", v, ok)
 		}
-		if v, ok := cache.getFromMemory(k2); !ok || v != "second" {
+		if v, ok := cache.get(k2); !ok || v != "second" {
 			t.Errorf("plain k2: got %v, %v", v, ok)
 		}
 		// k3 is equal to k1, should get the same value
-		if v, ok := cache.getFromMemory(k3); !ok || v != "first" {
+		if v, ok := cache.get(k3); !ok || v != "first" {
 			t.Errorf("plain k3 (same as k1): got %v, %v", v, ok)
 		}
 
 		// Update via equal key
-		cache.setToMemory(k3, "updated", 0)
-		if v, ok := cache.getFromMemory(k1); !ok || v != "updated" {
+		cache.set(k3, "updated", 0)
+		if v, ok := cache.get(k1); !ok || v != "updated" {
 			t.Errorf("plain k1 after k3 update: got %v, %v", v, ok)
 		}
 	})

@@ -6,16 +6,16 @@ import (
 	"time"
 )
 
-// Layer defines the interface for cache persistence backends.
-type Layer[K comparable, V any] interface {
-	// ValidateKey checks if a key is valid for this persistence layer.
+// Store defines the interface for cache persistence backends.
+type Store[K comparable, V any] interface {
+	// ValidateKey checks if a key is valid for this persistence store.
 	ValidateKey(key K) error
 
-	// Load retrieves a value from persistent storage.
-	Load(ctx context.Context, key K) (V, time.Time, bool, error)
+	// Get retrieves a value from persistent storage.
+	Get(ctx context.Context, key K) (V, time.Time, bool, error)
 
-	// Store saves a value to persistent storage with an expiry time.
-	Store(ctx context.Context, key K, value V, expiry time.Time) error
+	// Set saves a value to persistent storage with an expiry time.
+	Set(ctx context.Context, key K, value V, expiry time.Time) error
 
 	// Delete removes a value from persistent storage.
 	Delete(ctx context.Context, key K) error
@@ -36,7 +36,7 @@ type Layer[K comparable, V any] interface {
 	// Len returns the number of entries in persistent storage.
 	Len(ctx context.Context) (int, error)
 
-	// Close releases any resources held by the persistence layer.
+	// Close releases any resources held by the persistence store.
 	Close() error
 }
 

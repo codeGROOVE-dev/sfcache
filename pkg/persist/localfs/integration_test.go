@@ -27,12 +27,12 @@ func TestFilePersist_StoreLoad(t *testing.T) {
 	ctx := context.Background()
 
 	// Store a value
-	if err := fp.Store(ctx, "key1", 42, time.Time{}); err != nil {
+	if err := fp.Set(ctx, "key1", 42, time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
 	// Load the value
-	val, expiry, found, err := fp.Load(ctx, "key1")
+	val, expiry, found, err := fp.Get(ctx, "key1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestFilePersist_LoadMissing(t *testing.T) {
 	ctx := context.Background()
 
 	// Load non-existent key
-	_, _, found, err := fp.Load(ctx, "missing")
+	_, _, found, err := fp.Get(ctx, "missing")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -87,12 +87,12 @@ func TestFilePersist_TTL(t *testing.T) {
 
 	// Store with past expiry
 	past := time.Now().Add(-1 * time.Second)
-	if err := fp.Store(ctx, "expired", "value", past); err != nil {
+	if err := fp.Set(ctx, "expired", "value", past); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
 	// Should not be loadable
-	_, _, found, err := fp.Load(ctx, "expired")
+	_, _, found, err := fp.Get(ctx, "expired")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestFilePersist_Delete(t *testing.T) {
 	ctx := context.Background()
 
 	// Store and delete
-	if err := fp.Store(ctx, "key1", 42, time.Time{}); err != nil {
+	if err := fp.Set(ctx, "key1", 42, time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
@@ -131,7 +131,7 @@ func TestFilePersist_Delete(t *testing.T) {
 	}
 
 	// Should not be loadable
-	_, _, found, err := fp.Load(ctx, "key1")
+	_, _, found, err := fp.Get(ctx, "key1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -166,13 +166,13 @@ func TestFilePersist_LoadAll(t *testing.T) {
 		"key3": 3,
 	}
 	for k, v := range entries {
-		if err := fp.Store(ctx, k, v, time.Time{}); err != nil {
+		if err := fp.Set(ctx, k, v, time.Time{}); err != nil {
 			t.Fatalf("Store %s: %v", k, err)
 		}
 	}
 
 	// Store expired entry
-	if err := fp.Store(ctx, "expired", 99, time.Now().Add(-1*time.Second)); err != nil {
+	if err := fp.Set(ctx, "expired", 99, time.Now().Add(-1*time.Second)); err != nil {
 		t.Fatalf("Store expired: %v", err)
 	}
 
@@ -225,17 +225,17 @@ func TestFilePersist_Update(t *testing.T) {
 	ctx := context.Background()
 
 	// Store initial value
-	if err := fp.Store(ctx, "key", "value1", time.Time{}); err != nil {
+	if err := fp.Set(ctx, "key", "value1", time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
 	// Update value
-	if err := fp.Store(ctx, "key", "value2", time.Time{}); err != nil {
+	if err := fp.Set(ctx, "key", "value2", time.Time{}); err != nil {
 		t.Fatalf("Store update: %v", err)
 	}
 
 	// Load and verify updated value
-	val, _, found, err := fp.Load(ctx, "key")
+	val, _, found, err := fp.Get(ctx, "key")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestFilePersist_ContextCancellation(t *testing.T) {
 	ctx := context.Background()
 	for i := range 100 {
 		key := fmt.Sprintf("key%d", i)
-		if err := fp.Store(ctx, key, i, time.Time{}); err != nil {
+		if err := fp.Set(ctx, key, i, time.Time{}); err != nil {
 			t.Fatalf("Store: %v", err)
 		}
 	}
@@ -301,12 +301,12 @@ func TestFilePersist_Store_CompleteFlow(t *testing.T) {
 
 	// Test complete store flow with expiry
 	expiry := time.Now().Add(1 * time.Hour)
-	if err := fp.Store(ctx, "key1", "value1", expiry); err != nil {
+	if err := fp.Set(ctx, "key1", "value1", expiry); err != nil {
 		t.Fatalf("Store with expiry: %v", err)
 	}
 
 	// Load and verify expiry is set
-	val, loadedExpiry, found, err := fp.Load(ctx, "key1")
+	val, loadedExpiry, found, err := fp.Get(ctx, "key1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -416,19 +416,19 @@ func TestFilePersist_Cleanup(t *testing.T) {
 	recentFuture := time.Now().Add(30 * time.Minute) // Future expiry, should stay
 	future := time.Now().Add(2 * time.Hour)          // Far future, should stay
 
-	if err := fp.Store(ctx, "expired-old", 1, past); err != nil {
+	if err := fp.Set(ctx, "expired-old", 1, past); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if err := fp.Store(ctx, "expired-recent", 2, recentPast); err != nil {
+	if err := fp.Set(ctx, "expired-recent", 2, recentPast); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if err := fp.Store(ctx, "valid-soon", 3, recentFuture); err != nil {
+	if err := fp.Set(ctx, "valid-soon", 3, recentFuture); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if err := fp.Store(ctx, "valid-future", 4, future); err != nil {
+	if err := fp.Set(ctx, "valid-future", 4, future); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if err := fp.Store(ctx, "no-expiry", 5, time.Time{}); err != nil {
+	if err := fp.Set(ctx, "no-expiry", 5, time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
@@ -447,7 +447,7 @@ func TestFilePersist_Cleanup(t *testing.T) {
 	// Note: Load won't find them even without cleanup since they're expired
 
 	// Verify valid items still exist
-	_, _, found, err := fp.Load(ctx, "valid-soon")
+	_, _, found, err := fp.Get(ctx, "valid-soon")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -455,7 +455,7 @@ func TestFilePersist_Cleanup(t *testing.T) {
 		t.Error("valid-soon should still exist")
 	}
 
-	_, _, found, err = fp.Load(ctx, "valid-future")
+	_, _, found, err = fp.Get(ctx, "valid-future")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -463,7 +463,7 @@ func TestFilePersist_Cleanup(t *testing.T) {
 		t.Error("valid-future should still exist")
 	}
 
-	_, _, found, err = fp.Load(ctx, "no-expiry")
+	_, _, found, err = fp.Get(ctx, "no-expiry")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -488,7 +488,7 @@ func TestFilePersist_LoadRecent_WithLimit(t *testing.T) {
 
 	// Store 10 entries
 	for i := range 10 {
-		if err := fp.Store(ctx, fmt.Sprintf("key%d", i), i, time.Time{}); err != nil {
+		if err := fp.Set(ctx, fmt.Sprintf("key%d", i), i, time.Time{}); err != nil {
 			t.Fatalf("Store: %v", err)
 		}
 	}
@@ -554,7 +554,7 @@ func TestFilePersist_LoadErrors(t *testing.T) {
 	ctx := context.Background()
 
 	// Store a value
-	if err := fp.Store(ctx, "test", 42, time.Time{}); err != nil {
+	if err := fp.Set(ctx, "test", 42, time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
@@ -565,7 +565,7 @@ func TestFilePersist_LoadErrors(t *testing.T) {
 	}
 
 	// Load should handle corrupt file gracefully
-	_, _, found, err := fp.Load(ctx, "test")
+	_, _, found, err := fp.Get(ctx, "test")
 	if found {
 		t.Error("Load should not find corrupted entry")
 	}
@@ -591,12 +591,12 @@ func TestFilePersist_StoreCreateDir(t *testing.T) {
 	ctx := context.Background()
 
 	// Store should create directories as needed
-	if err := fp.Store(ctx, "key1", 42, time.Time{}); err != nil {
+	if err := fp.Set(ctx, "key1", 42, time.Time{}); err != nil {
 		t.Fatalf("Store should create directories: %v", err)
 	}
 
 	// Verify file was created
-	val, _, found, err := fp.Load(ctx, "key1")
+	val, _, found, err := fp.Get(ctx, "key1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -678,11 +678,11 @@ func TestFilePersist_KeyToFilename_Short(t *testing.T) {
 
 	// Test with very short key (less than 2 characters for subdirectory)
 	ctx := context.Background()
-	if err := fp.Store(ctx, "a", 1, time.Time{}); err != nil {
+	if err := fp.Set(ctx, "a", 1, time.Time{}); err != nil {
 		t.Fatalf("Store short key: %v", err)
 	}
 
-	val, _, found, err := fp.Load(ctx, "a")
+	val, _, found, err := fp.Get(ctx, "a")
 	if err != nil {
 		t.Fatalf("Load short key: %v", err)
 	}
@@ -728,11 +728,11 @@ func TestFilePersist_New_UseDefaultCacheDir(t *testing.T) {
 	ctx := context.Background()
 
 	// Should be able to store and retrieve
-	if err := fp.Store(ctx, "key1", 42, time.Time{}); err != nil {
+	if err := fp.Set(ctx, "key1", 42, time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
-	val, _, found, err := fp.Load(ctx, "key1")
+	val, _, found, err := fp.Get(ctx, "key1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -757,12 +757,12 @@ func TestFilePersist_Store_WithExpiry(t *testing.T) {
 
 	// Store with future expiry
 	expiry := time.Now().Add(1 * time.Hour)
-	if err := fp.Store(ctx, "key1", 42, expiry); err != nil {
+	if err := fp.Set(ctx, "key1", 42, expiry); err != nil {
 		t.Fatalf("Store with expiry: %v", err)
 	}
 
 	// Load and check expiry is preserved
-	val, loadedExpiry, found, err := fp.Load(ctx, "key1")
+	val, loadedExpiry, found, err := fp.Get(ctx, "key1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -794,10 +794,10 @@ func TestFilePersist_LoadRecent_WithExpired(t *testing.T) {
 	ctx := context.Background()
 
 	// Store valid and expired entries
-	if err := fp.Store(ctx, "valid", 1, time.Now().Add(1*time.Hour)); err != nil {
+	if err := fp.Set(ctx, "valid", 1, time.Now().Add(1*time.Hour)); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if err := fp.Store(ctx, "expired", 2, time.Now().Add(-1*time.Hour)); err != nil {
+	if err := fp.Set(ctx, "expired", 2, time.Now().Add(-1*time.Hour)); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
@@ -843,7 +843,7 @@ func TestFilePersist_LoadRecent_ContextCancellation(t *testing.T) {
 
 	// Store many entries
 	for i := range 100 {
-		if err := fp.Store(context.Background(), fmt.Sprintf("key-%d", i), i, time.Time{}); err != nil {
+		if err := fp.Set(context.Background(), fmt.Sprintf("key-%d", i), i, time.Time{}); err != nil {
 			t.Fatalf("Store: %v", err)
 		}
 	}
@@ -885,7 +885,7 @@ func TestFilePersist_Cleanup_ContextCancellation(t *testing.T) {
 	// Store many expired entries
 	past := time.Now().Add(-2 * time.Hour)
 	for i := range 100 {
-		if err := fp.Store(context.Background(), fmt.Sprintf("expired-%d", i), i, past); err != nil {
+		if err := fp.Set(context.Background(), fmt.Sprintf("expired-%d", i), i, past); err != nil {
 			t.Fatalf("Store: %v", err)
 		}
 	}
@@ -919,14 +919,14 @@ func TestFilePersist_Flush(t *testing.T) {
 
 	// Store multiple entries
 	for i := range 10 {
-		if err := fp.Store(ctx, fmt.Sprintf("key-%d", i), i*100, time.Time{}); err != nil {
+		if err := fp.Set(ctx, fmt.Sprintf("key-%d", i), i*100, time.Time{}); err != nil {
 			t.Fatalf("Store: %v", err)
 		}
 	}
 
 	// Verify files exist
 	for i := range 10 {
-		if _, _, found, err := fp.Load(ctx, fmt.Sprintf("key-%d", i)); err != nil || !found {
+		if _, _, found, err := fp.Get(ctx, fmt.Sprintf("key-%d", i)); err != nil || !found {
 			t.Fatalf("key-%d should exist before flush", i)
 		}
 	}
@@ -942,7 +942,7 @@ func TestFilePersist_Flush(t *testing.T) {
 
 	// All entries should be gone
 	for i := range 10 {
-		if _, _, found, err := fp.Load(ctx, fmt.Sprintf("key-%d", i)); err != nil {
+		if _, _, found, err := fp.Get(ctx, fmt.Sprintf("key-%d", i)); err != nil {
 			t.Fatalf("Load: %v", err)
 		} else if found {
 			t.Errorf("key-%d should not exist after flush", i)
@@ -989,7 +989,7 @@ func TestFilePersist_Flush_RemovesFiles(t *testing.T) {
 
 	// Store multiple entries
 	for i := range 10 {
-		if err := fp.Store(ctx, fmt.Sprintf("key-%d", i), i*100, time.Time{}); err != nil {
+		if err := fp.Set(ctx, fmt.Sprintf("key-%d", i), i*100, time.Time{}); err != nil {
 			t.Fatalf("Store: %v", err)
 		}
 	}
@@ -1045,7 +1045,7 @@ func TestFilePersist_Flush_ContextCancellation(t *testing.T) {
 
 	// Store many entries
 	for i := range 100 {
-		if err := fp.Store(context.Background(), fmt.Sprintf("key-%d", i), i, time.Time{}); err != nil {
+		if err := fp.Set(context.Background(), fmt.Sprintf("key-%d", i), i, time.Time{}); err != nil {
 			t.Fatalf("Store: %v", err)
 		}
 	}
@@ -1086,7 +1086,7 @@ func TestFilePersist_Len(t *testing.T) {
 
 	// Store entries
 	for i := range 10 {
-		if err := fp.Store(ctx, fmt.Sprintf("key-%d", i), i*100, time.Time{}); err != nil {
+		if err := fp.Set(ctx, fmt.Sprintf("key-%d", i), i*100, time.Time{}); err != nil {
 			t.Fatalf("Store: %v", err)
 		}
 	}
@@ -1142,7 +1142,7 @@ func TestFilePersist_Len_NewPersisterSameDir(t *testing.T) {
 	}
 
 	for i := range 10 {
-		if err := fp1.Store(ctx, fmt.Sprintf("key-%d", i), i*100, time.Time{}); err != nil {
+		if err := fp1.Set(ctx, fmt.Sprintf("key-%d", i), i*100, time.Time{}); err != nil {
 			t.Fatalf("Store: %v", err)
 		}
 	}

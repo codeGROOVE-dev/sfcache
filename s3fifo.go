@@ -46,8 +46,8 @@ func wyhashString(s string) uint64 {
 }
 
 const (
-	maxShards        = 2048
-	minItemsPerShard = 256 // Minimum items per shard for S3-FIFO algorithm to work well
+	maxShards          = 2048
+	minEntriesPerShard = 256 // Minimum entries per shard for S3-FIFO algorithm to work well
 )
 
 // s3fifo implements the S3-FIFO eviction algorithm from SOSP'23 paper
@@ -55,17 +55,17 @@ const (
 //
 // This implementation uses dynamic sharding for improved concurrent performance.
 // The number of shards is determined by capacity to ensure each shard has enough
-// items for the S3-FIFO algorithm to work effectively.
+// entries for the S3-FIFO algorithm to work effectively.
 // Each shard is an independent S3-FIFO instance with its own queues and lock.
 //
 // Algorithm per shard:
-// - Small queue (S): 10-20% of shard capacity, for new objects
-// - Main queue (M): 80-90% of shard capacity, for promoted objects
+// - Small queue (S): 10-20% of shard capacity, for new entries
+// - Main queue (M): 80-90% of shard capacity, for promoted entries
 // - Ghost queue (G): Tracks evicted keys (no data)
 //
 // On cache miss:
-//   - If object not in ghost → insert into Small
-//   - If object in ghost → insert into Main (was accessed before)
+//   - If entry not in ghost → insert into Small
+//   - If entry in ghost → insert into Main (was accessed before)
 //
 // On eviction from Small:
 //   - If freq == 0 → evict and add to ghost
@@ -85,12 +85,13 @@ type s3fifo[K comparable, V any] struct {
 
 // shard is an independent S3-FIFO cache partition.
 // Uses RWMutex for read-heavy workloads; sharding reduces contention across goroutines.
+// The entries map provides O(1) lookup while intrusive lists maintain queue order.
 //
 //nolint:govet // fieldalignment: padding is intentional to prevent false sharing
 type shard[K comparable, V any] struct {
 	mu        sync.RWMutex       // RWMutex is faster for read-heavy workloads with sharding
 	_         [40]byte           // Padding to cache line boundary
-	items     map[K]*entry[K, V] // Direct map access (protected by mu)
+	entries   map[K]*entry[K, V] // Direct map access (protected by mu)
 	small     entryList[K, V]    // Intrusive list for small queue
 	main      entryList[K, V]    // Intrusive list for main queue
 	ghost     ghostList[K]       // Intrusive list for ghost queue
@@ -210,7 +211,7 @@ func timeToNano(t time.Time) int64 {
 	return t.UnixNano()
 }
 
-// entry represents a cached item with metadata.
+// entry represents a cached value with metadata.
 type entry[K comparable, V any] struct {
 	key        K
 	value      V
@@ -228,9 +229,9 @@ func newS3FIFO[K comparable, V any](cfg *config) *s3fifo[K, V] {
 		capacity = 16384 // 2^14, divides evenly by 16 shards
 	}
 
-	// Calculate number of shards: ensure each shard has at least minItemsPerShard
+	// Calculate number of shards: ensure each shard has at least minEntriesPerShard
 	// Round down to nearest power of 2 for fast modulo via bitwise AND
-	numShards := capacity / minItemsPerShard
+	numShards := capacity / minEntriesPerShard
 	if numShards < 1 {
 		numShards = 1
 	}
@@ -307,7 +308,7 @@ func newShard[K comparable, V any](capacity int, smallRatio, ghostRatio float64)
 		capacity:  capacity,
 		smallCap:  smallCap,
 		ghostCap:  ghostCap,
-		items:     make(map[K]*entry[K, V], capacity),
+		entries:   make(map[K]*entry[K, V], capacity),
 		ghostKeys: make(map[K]*ghostEntry[K], ghostCap),
 	}
 	return s
@@ -400,15 +401,15 @@ func (c *s3fifo[K, V]) shardIndexSlow(key K) uint64 {
 	}
 }
 
-// getFromMemory retrieves a value from the in-memory cache.
+// get retrieves a value from the cache.
 // On hit, increments frequency counter (used during eviction).
-func (c *s3fifo[K, V]) getFromMemory(key K) (V, bool) {
+func (c *s3fifo[K, V]) get(key K) (V, bool) {
 	return c.getShard(key).get(key)
 }
 
 func (s *shard[K, V]) get(key K) (V, bool) {
 	s.mu.RLock()
-	ent, ok := s.items[key]
+	ent, ok := s.entries[key]
 	s.mu.RUnlock()
 
 	if !ok {
@@ -431,16 +432,16 @@ func (s *shard[K, V]) get(key K) (V, bool) {
 	return ent.value, true
 }
 
-// getOrSetMemory retrieves a value or sets it if not found, in a single operation.
+// getOrSet retrieves a value or sets it if not found, in a single operation.
 // Returns the value and true if found, or sets the value and returns false.
-func (c *s3fifo[K, V]) getOrSetMemory(key K, value V, expiryNano int64) (V, bool) {
+func (c *s3fifo[K, V]) getOrSet(key K, value V, expiryNano int64) (V, bool) {
 	return c.getShard(key).getOrSet(key, value, expiryNano)
 }
 
 func (s *shard[K, V]) getOrSet(key K, value V, expiryNano int64) (V, bool) {
 	// Fast path: try read lock first (optimistic for cache hits)
 	s.mu.RLock()
-	if ent, ok := s.items[key]; ok {
+	if ent, ok := s.entries[key]; ok {
 		// Check if NOT expired - return early with cache hit
 		if ent.expiryNano == 0 || time.Now().UnixNano() <= ent.expiryNano {
 			if f := ent.freq.Load(); f < 3 {
@@ -460,7 +461,7 @@ func (s *shard[K, V]) getOrSet(key K, value V, expiryNano int64) (V, bool) {
 	s.mu.Lock()
 
 	// Double-check after acquiring write lock
-	if ent, ok := s.items[key]; ok {
+	if ent, ok := s.entries[key]; ok {
 		// Check expiration
 		if ent.expiryNano != 0 && time.Now().UnixNano() > ent.expiryNano {
 			// Expired - update in place
@@ -503,14 +504,14 @@ func (s *shard[K, V]) getOrSet(key K, value V, expiryNano int64) (V, bool) {
 		s.main.pushBack(ent)
 	}
 
-	s.items[key] = ent
+	s.entries[key] = ent
 	s.mu.Unlock()
 	return value, false
 }
 
-// setToMemory adds or updates a value in the in-memory cache.
+// set adds or updates a value in the cache.
 // expiryNano is Unix nanoseconds; 0 means no expiry.
-func (c *s3fifo[K, V]) setToMemory(key K, value V, expiryNano int64) {
+func (c *s3fifo[K, V]) set(key K, value V, expiryNano int64) {
 	c.getShard(key).set(key, value, expiryNano)
 }
 
@@ -518,7 +519,7 @@ func (s *shard[K, V]) set(key K, value V, expiryNano int64) {
 	s.mu.Lock()
 
 	// Fast path: update existing entry
-	if ent, ok := s.items[key]; ok {
+	if ent, ok := s.entries[key]; ok {
 		ent.value = value
 		ent.expiryNano = expiryNano
 		s.mu.Unlock()
@@ -556,12 +557,12 @@ func (s *shard[K, V]) set(key K, value V, expiryNano int64) {
 	}
 
 	// In-place map insertion
-	s.items[key] = ent
+	s.entries[key] = ent
 	s.mu.Unlock()
 }
 
-// deleteFromMemory removes a value from the in-memory cache.
-func (c *s3fifo[K, V]) deleteFromMemory(key K) {
+// del removes a value from the cache.
+func (c *s3fifo[K, V]) del(key K) {
 	c.getShard(key).delete(key)
 }
 
@@ -569,7 +570,7 @@ func (s *shard[K, V]) delete(key K) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	ent, ok := s.items[key]
+	ent, ok := s.entries[key]
 	if !ok {
 		return
 	}
@@ -580,11 +581,11 @@ func (s *shard[K, V]) delete(key K) {
 		s.main.remove(ent)
 	}
 
-	delete(s.items, key)
+	delete(s.entries, key)
 	s.putEntry(ent)
 }
 
-// evict removes one item according to S3-FIFO algorithm.
+// evict removes one entry according to S3-FIFO algorithm.
 func (s *shard[K, V]) evict() {
 	if s.small.len >= s.smallCap {
 		s.evictFromSmall()
@@ -593,7 +594,7 @@ func (s *shard[K, V]) evict() {
 	s.evictFromMain()
 }
 
-// evictFromSmall evicts an item from the small queue.
+// evictFromSmall evicts an entry from the small queue.
 func (s *shard[K, V]) evictFromSmall() {
 	for s.small.len > 0 {
 		ent := s.small.front()
@@ -602,21 +603,21 @@ func (s *shard[K, V]) evictFromSmall() {
 		// Check if accessed since last eviction attempt
 		if ent.freq.Load() == 0 {
 			// Not accessed - evict and track in ghost
-			delete(s.items, ent.key)
+			delete(s.entries, ent.key)
 			s.addToGhost(ent.key)
 			s.putEntry(ent)
 			return
 		}
 
 		// Accessed - promote to Main queue
-		// Reset frequency per S3-FIFO paper: item must prove itself in Main
+		// Reset frequency per S3-FIFO paper: entry must prove itself in Main
 		ent.freq.Store(0)
 		ent.inSmall = false
 		s.main.pushBack(ent)
 	}
 }
 
-// evictFromMain evicts an item from the main queue.
+// evictFromMain evicts an entry from the main queue.
 func (s *shard[K, V]) evictFromMain() {
 	for s.main.len > 0 {
 		ent := s.main.front()
@@ -626,7 +627,7 @@ func (s *shard[K, V]) evictFromMain() {
 		f := ent.freq.Load()
 		if f == 0 {
 			// Not accessed - evict
-			delete(s.items, ent.key)
+			delete(s.entries, ent.key)
 			s.putEntry(ent)
 			return
 		}
@@ -653,20 +654,20 @@ func (s *shard[K, V]) addToGhost(key K) {
 	s.ghostKeys[key] = ent
 }
 
-// memoryLen returns the total number of items across all shards.
-func (c *s3fifo[K, V]) memoryLen() int {
+// len returns the total number of entries across all shards.
+func (c *s3fifo[K, V]) len() int {
 	total := 0
 	for i := range c.shards {
 		s := c.shards[i]
 		s.mu.Lock()
-		total += len(s.items)
+		total += len(s.entries)
 		s.mu.Unlock()
 	}
 	return total
 }
 
-// flushMemory removes all entries from all shards.
-func (c *s3fifo[K, V]) flushMemory() int {
+// flush removes all entries from all shards.
+func (c *s3fifo[K, V]) flush() int {
 	total := 0
 	for i := range c.shards {
 		total += c.shards[i].flush()
@@ -678,8 +679,8 @@ func (s *shard[K, V]) flush() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	n := len(s.items)
-	s.items = make(map[K]*entry[K, V], s.capacity)
+	n := len(s.entries)
+	s.entries = make(map[K]*entry[K, V], s.capacity)
 	s.small.init()
 	s.main.init()
 	s.ghost.init()

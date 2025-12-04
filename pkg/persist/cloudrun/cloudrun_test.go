@@ -86,12 +86,12 @@ func TestNew_BasicOperations(t *testing.T) {
 	key := "answer"
 	value := 42
 
-	err = p.Store(ctx, key, value, time.Time{})
+	err = p.Set(ctx, key, value, time.Time{})
 	if err != nil {
 		t.Fatalf("Store() failed: %v", err)
 	}
 
-	got, _, found, err := p.Load(ctx, key)
+	got, _, found, err := p.Get(ctx, key)
 	if err != nil {
 		t.Fatalf("Load() failed: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestNew_MultipleTypes(t *testing.T) {
 						t.Logf("Close error: %v", err)
 					}
 				}()
-				return p.Store(ctx, "key", 42, time.Time{})
+				return p.Set(ctx, "key", 42, time.Time{})
 			},
 		},
 		{
@@ -183,7 +183,7 @@ func TestNew_MultipleTypes(t *testing.T) {
 						t.Logf("Close error: %v", err)
 					}
 				}()
-				return p.Store(ctx, 123, "value", time.Time{})
+				return p.Set(ctx, 123, "value", time.Time{})
 			},
 		},
 		{
@@ -202,7 +202,7 @@ func TestNew_MultipleTypes(t *testing.T) {
 						t.Logf("Close error: %v", err)
 					}
 				}()
-				return p.Store(ctx, "user", TestStruct{Name: "Alice", Age: 30}, time.Time{})
+				return p.Set(ctx, "user", TestStruct{Name: "Alice", Age: 30}, time.Time{})
 			},
 		},
 	}
@@ -241,7 +241,7 @@ func TestNew_CloudRunFallbackWithDelete(t *testing.T) {
 	}()
 
 	// Store and delete
-	if err := p.Store(ctx, "key1", 100, time.Time{}); err != nil {
+	if err := p.Set(ctx, "key1", 100, time.Time{}); err != nil {
 		t.Fatalf("Store() failed: %v", err)
 	}
 
@@ -250,7 +250,7 @@ func TestNew_CloudRunFallbackWithDelete(t *testing.T) {
 	}
 
 	// Verify deleted
-	_, _, found, err := p.Load(ctx, "key1")
+	_, _, found, err := p.Get(ctx, "key1")
 	if err != nil {
 		t.Fatalf("Load() failed: %v", err)
 	}

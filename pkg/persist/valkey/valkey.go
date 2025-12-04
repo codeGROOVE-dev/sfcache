@@ -25,7 +25,7 @@ type persister[K comparable, V any] struct {
 // New creates a new Valkey-based persistence layer.
 // The cacheID is used as a key prefix to namespace cache entries.
 // addr should be in the format "host:port" (e.g., "localhost:6379").
-func New[K comparable, V any](ctx context.Context, cacheID, addr string) (persist.Layer[K, V], error) {
+func New[K comparable, V any](ctx context.Context, cacheID, addr string) (persist.Store[K, V], error) {
 	if cacheID == "" {
 		return nil, errors.New("cacheID cannot be empty")
 	}
@@ -75,10 +75,10 @@ func (p *persister[K, V]) Location(key K) string {
 	return p.makeKey(key)
 }
 
-// Load retrieves a value from Valkey.
+// Get retrieves a value from Valkey.
 //
-//nolint:revive,gocritic // function-result-limit, unnamedResult - required by PersistenceLayer interface
-func (p *persister[K, V]) Load(ctx context.Context, key K) (V, time.Time, bool, error) {
+//nolint:revive,gocritic // function-result-limit, unnamedResult - required by persist.Store interface
+func (p *persister[K, V]) Get(ctx context.Context, key K) (V, time.Time, bool, error) {
 	var zero V
 	vk := p.makeKey(key)
 
@@ -115,8 +115,8 @@ func (p *persister[K, V]) Load(ctx context.Context, key K) (V, time.Time, bool, 
 	return value, expiry, true, nil
 }
 
-// Store saves a value to Valkey with optional expiry.
-func (p *persister[K, V]) Store(ctx context.Context, key K, value V, expiry time.Time) error {
+// Set saves a value to Valkey with optional expiry.
+func (p *persister[K, V]) Set(ctx context.Context, key K, value V, expiry time.Time) error {
 	vk := p.makeKey(key)
 
 	// Marshal value to JSON

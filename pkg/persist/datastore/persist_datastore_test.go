@@ -32,12 +32,12 @@ func TestDatastorePersist_StoreLoad(t *testing.T) {
 	}()
 
 	// Store a value
-	if err := dp.Store(ctx, "key1", 42, time.Time{}); err != nil {
+	if err := dp.Set(ctx, "key1", 42, time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
 	// Load the value
-	val, expiry, found, err := dp.Load(ctx, "key1")
+	val, expiry, found, err := dp.Get(ctx, "key1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestDatastorePersist_LoadMissing(t *testing.T) {
 	}()
 
 	// Load non-existent key
-	_, _, found, err := dp.Load(ctx, "missing-key-12345")
+	_, _, found, err := dp.Get(ctx, "missing-key-12345")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -97,12 +97,12 @@ func TestDatastorePersist_TTL(t *testing.T) {
 
 	// Store with past expiry
 	past := time.Now().Add(-1 * time.Second)
-	if err := dp.Store(ctx, "expired", "value", past); err != nil {
+	if err := dp.Set(ctx, "expired", "value", past); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
 	// Should not be loadable
-	_, _, found, err := dp.Load(ctx, "expired")
+	_, _, found, err := dp.Get(ctx, "expired")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestDatastorePersist_Delete(t *testing.T) {
 	}()
 
 	// Store and delete
-	if err := dp.Store(ctx, "key1", 42, time.Time{}); err != nil {
+	if err := dp.Set(ctx, "key1", 42, time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
@@ -135,7 +135,7 @@ func TestDatastorePersist_Delete(t *testing.T) {
 	}
 
 	// Should not be loadable
-	_, _, found, err := dp.Load(ctx, "key1")
+	_, _, found, err := dp.Get(ctx, "key1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -164,17 +164,17 @@ func TestDatastorePersist_Update(t *testing.T) {
 	}()
 
 	// Store initial value
-	if err := dp.Store(ctx, "key", "value1", time.Time{}); err != nil {
+	if err := dp.Set(ctx, "key", "value1", time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
 	// Update value
-	if err := dp.Store(ctx, "key", "value2", time.Time{}); err != nil {
+	if err := dp.Set(ctx, "key", "value2", time.Time{}); err != nil {
 		t.Fatalf("Store update: %v", err)
 	}
 
 	// Load and verify updated value
-	val, _, found, err := dp.Load(ctx, "key")
+	val, _, found, err := dp.Get(ctx, "key")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -218,12 +218,12 @@ func TestDatastorePersist_ComplexValue(t *testing.T) {
 	}
 
 	// Store complex value
-	if err := dp.Store(ctx, "user1", user, time.Time{}); err != nil {
+	if err := dp.Set(ctx, "user1", user, time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 
 	// Load and verify
-	loaded, _, found, err := dp.Load(ctx, "user1")
+	loaded, _, found, err := dp.Get(ctx, "user1")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestDatastorePersist_LoadRecent(t *testing.T) {
 	// Store multiple entries
 	for i := range 5 {
 		key := "test-" + string(rune('a'+i))
-		if err := dp.Store(ctx, key, i, time.Time{}); err != nil {
+		if err := dp.Set(ctx, key, i, time.Time{}); err != nil {
 			t.Fatalf("Store %s: %v", key, err)
 		}
 	}
@@ -383,16 +383,16 @@ func TestDatastorePersist_Cleanup(t *testing.T) {
 	past := time.Now().Add(-2 * time.Hour)
 	future := time.Now().Add(2 * time.Hour)
 
-	if err := dp.Store(ctx, "expired-1", 1, past); err != nil {
+	if err := dp.Set(ctx, "expired-1", 1, past); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if err := dp.Store(ctx, "expired-2", 2, past); err != nil {
+	if err := dp.Set(ctx, "expired-2", 2, past); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if err := dp.Store(ctx, "valid-1", 3, future); err != nil {
+	if err := dp.Set(ctx, "valid-1", 3, future); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if err := dp.Store(ctx, "no-expiry", 4, time.Time{}); err != nil {
+	if err := dp.Set(ctx, "no-expiry", 4, time.Time{}); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 

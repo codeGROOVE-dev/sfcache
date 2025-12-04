@@ -35,25 +35,25 @@ func TestBenchmarkSuite(t *testing.T) {
 	fmt.Println("sfcache benchmark bake-off")
 	fmt.Println()
 
-	// 1. Real-world hit rate from Meta KVCache production trace
-	printTestHeader("TestMetaTrace", "Meta Trace Hit Rate (10M ops)")
-	runMetaTraceHitRate()
-
-	// 2. Synthetic hit rate with Zipf distribution
-	printTestHeader("TestHitRate", "Zipf Hit Rate")
-	runHitRateBenchmark()
-
-	// 3. Single-threaded latency
+	// 1. Single-threaded latency
 	printTestHeader("TestLatency", "Single-Threaded Latency")
 	runPerformanceBenchmark()
 
-	// 4. Single-threaded throughput (Zipf)
+	// 2. Single-threaded throughput (Zipf)
 	printTestHeader("TestZipfThroughput1", "Zipf Throughput (1 thread)")
 	runZipfThroughputBenchmark(1)
 
-	// 5. Multi-threaded throughput (Zipf)
+	// 3. Multi-threaded throughput (Zipf)
 	printTestHeader("TestZipfThroughput16", "Zipf Throughput (16 threads)")
 	runZipfThroughputBenchmark(16)
+
+	// 4. Real-world hit rate from Meta KVCache production trace
+	printTestHeader("TestMetaTrace", "Meta Trace Hit Rate (10M ops)")
+	runMetaTraceHitRate()
+
+	// 5. Synthetic hit rate with Zipf distribution
+	printTestHeader("TestHitRate", "Zipf Hit Rate")
+	runHitRateBenchmark()
 }
 
 func printTestHeader(testName, description string) {

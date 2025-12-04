@@ -49,7 +49,7 @@ type persister[K comparable, V any] struct {
 // The cacheID is used as a subdirectory name under the OS cache directory.
 // If dir is provided (non-empty), it's used as the base directory instead of OS cache dir.
 // This is useful for testing with temporary directories.
-func New[K comparable, V any](cacheID string, dir string) (persist.Layer[K, V], error) {
+func New[K comparable, V any](cacheID string, dir string) (persist.Store[K, V], error) {
 	// Validate cacheID to prevent path traversal attacks
 	if cacheID == "" {
 		return nil, errors.New("cacheID cannot be empty")
@@ -134,10 +134,10 @@ func (p *persister[K, V]) Location(key K) string {
 	return filepath.Join(p.Dir, p.keyToFilename(key))
 }
 
-// Load retrieves a value from a file.
+// Get retrieves a value from a file.
 //
-//nolint:revive // function-result-limit - required by PersistenceLayer interface
-func (p *persister[K, V]) Load(ctx context.Context, key K) (value V, expiry time.Time, found bool, err error) {
+//nolint:revive // function-result-limit - required by persist.Store interface
+func (p *persister[K, V]) Get(ctx context.Context, key K) (value V, expiry time.Time, found bool, err error) {
 	var zero V
 	filename := filepath.Join(p.Dir, p.keyToFilename(key))
 
@@ -188,8 +188,8 @@ func (p *persister[K, V]) Load(ctx context.Context, key K) (value V, expiry time
 	return entry.Value, entry.Expiry, true, nil
 }
 
-// Store saves a value to a file.
-func (p *persister[K, V]) Store(ctx context.Context, key K, value V, expiry time.Time) error {
+// Set saves a value to a file.
+func (p *persister[K, V]) Set(ctx context.Context, key K, value V, expiry time.Time) error {
 	filename := filepath.Join(p.Dir, p.keyToFilename(key))
 	subdir := filepath.Dir(filename)
 
