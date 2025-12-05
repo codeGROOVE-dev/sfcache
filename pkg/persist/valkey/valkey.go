@@ -16,8 +16,8 @@ const (
 	maxKeyLength = 512 // Maximum key length for Valkey
 )
 
-// persister implements PersistenceLayer using Valkey/Redis.
-type persister[K comparable, V any] struct {
+// store implements Store using Valkey/Redis.
+type store[K comparable, V any] struct {
 	client valkey.Client
 	prefix string // Key prefix to namespace cache entries
 }
@@ -47,14 +47,14 @@ func New[K comparable, V any](ctx context.Context, cacheID, addr string) (persis
 		return nil, fmt.Errorf("valkey ping failed: %w", err)
 	}
 
-	return &persister[K, V]{
+	return &store[K, V]{
 		client: client,
 		prefix: cacheID + ":",
 	}, nil
 }
 
 // ValidateKey checks if a key is valid for Valkey persistence.
-func (*persister[K, V]) ValidateKey(key K) error {
+func (*store[K, V]) ValidateKey(key K) error {
 	k := fmt.Sprintf("%v", key)
 	if len(k) > maxKeyLength {
 		return fmt.Errorf("key too long: %d bytes (max %d)", len(k), maxKeyLength)
@@ -66,19 +66,19 @@ func (*persister[K, V]) ValidateKey(key K) error {
 }
 
 // makeKey creates a Valkey key from a cache key with prefix.
-func (p *persister[K, V]) makeKey(key K) string {
+func (p *store[K, V]) makeKey(key K) string {
 	return p.prefix + fmt.Sprintf("%v", key)
 }
 
 // Location returns the Valkey key for a given cache key.
-func (p *persister[K, V]) Location(key K) string {
+func (p *store[K, V]) Location(key K) string {
 	return p.makeKey(key)
 }
 
 // Get retrieves a value from Valkey.
 //
 //nolint:revive,gocritic // function-result-limit, unnamedResult - required by persist.Store interface
-func (p *persister[K, V]) Get(ctx context.Context, key K) (V, time.Time, bool, error) {
+func (p *store[K, V]) Get(ctx context.Context, key K) (V, time.Time, bool, error) {
 	var zero V
 	vk := p.makeKey(key)
 
@@ -116,7 +116,7 @@ func (p *persister[K, V]) Get(ctx context.Context, key K) (V, time.Time, bool, e
 }
 
 // Set saves a value to Valkey with optional expiry.
-func (p *persister[K, V]) Set(ctx context.Context, key K, value V, expiry time.Time) error {
+func (p *store[K, V]) Set(ctx context.Context, key K, value V, expiry time.Time) error {
 	vk := p.makeKey(key)
 
 	// Marshal value to JSON
@@ -151,7 +151,7 @@ func (p *persister[K, V]) Set(ctx context.Context, key K, value V, expiry time.T
 }
 
 // Delete removes a value from Valkey.
-func (p *persister[K, V]) Delete(ctx context.Context, key K) error {
+func (p *store[K, V]) Delete(ctx context.Context, key K) error {
 	vk := p.makeKey(key)
 
 	cmd := p.client.B().Del().Key(vk).Build()
@@ -167,7 +167,7 @@ func (p *persister[K, V]) Delete(ctx context.Context, key K) error {
 // If limit > 0, returns up to limit entries (not guaranteed to be most recent).
 //
 //nolint:gocritic // unnamedResult - channel returns are self-documenting
-func (p *persister[K, V]) LoadRecent(ctx context.Context, limit int) (<-chan persist.Entry[K, V], <-chan error) {
+func (p *store[K, V]) LoadRecent(ctx context.Context, limit int) (<-chan persist.Entry[K, V], <-chan error) {
 	entryCh := make(chan persist.Entry[K, V], 100)
 	errCh := make(chan error, 1)
 
@@ -266,14 +266,14 @@ func (p *persister[K, V]) LoadRecent(ctx context.Context, limit int) (<-chan per
 
 // Cleanup removes expired entries from Valkey.
 // Valkey handles expiration automatically via TTL, so this is a no-op.
-func (*persister[K, V]) Cleanup(_ context.Context, _ time.Duration) (int, error) {
+func (*store[K, V]) Cleanup(_ context.Context, _ time.Duration) (int, error) {
 	// Valkey automatically handles TTL expiration
 	return 0, nil
 }
 
 // Flush removes all entries with this cache's prefix from Valkey.
 // Returns the number of entries removed and any error.
-func (p *persister[K, V]) Flush(ctx context.Context) (int, error) {
+func (p *store[K, V]) Flush(ctx context.Context) (int, error) {
 	n := 0
 	pat := p.prefix + "*"
 	var cursor uint64
@@ -308,7 +308,7 @@ func (p *persister[K, V]) Flush(ctx context.Context) (int, error) {
 }
 
 // Len returns the number of entries with this cache's prefix in Valkey.
-func (p *persister[K, V]) Len(ctx context.Context) (int, error) {
+func (p *store[K, V]) Len(ctx context.Context) (int, error) {
 	n := 0
 	pat := p.prefix + "*"
 	var cursor uint64
@@ -337,7 +337,7 @@ func (p *persister[K, V]) Len(ctx context.Context) (int, error) {
 }
 
 // Close releases Valkey client resources.
-func (p *persister[K, V]) Close() error {
+func (p *store[K, V]) Close() error {
 	p.client.Close()
 	return nil
 }

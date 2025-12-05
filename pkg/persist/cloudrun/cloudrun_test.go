@@ -88,18 +88,18 @@ func TestNew_BasicOperations(t *testing.T) {
 
 	err = p.Set(ctx, key, value, time.Time{})
 	if err != nil {
-		t.Fatalf("Store() failed: %v", err)
+		t.Fatalf("Set() failed: %v", err)
 	}
 
 	got, _, found, err := p.Get(ctx, key)
 	if err != nil {
-		t.Fatalf("Load() failed: %v", err)
+		t.Fatalf("Get() failed: %v", err)
 	}
 	if !found {
-		t.Fatal("Load() should find stored value")
+		t.Fatal("Get() should find stored value")
 	}
 	if got != value {
-		t.Errorf("Load() = %v, want %v", got, value)
+		t.Errorf("Get() = %v, want %v", got, value)
 	}
 }
 
@@ -242,7 +242,7 @@ func TestNew_CloudRunFallbackWithDelete(t *testing.T) {
 
 	// Store and delete
 	if err := p.Set(ctx, "key1", 100, time.Time{}); err != nil {
-		t.Fatalf("Store() failed: %v", err)
+		t.Fatalf("Set() failed: %v", err)
 	}
 
 	if err := p.Delete(ctx, "key1"); err != nil {
@@ -252,7 +252,7 @@ func TestNew_CloudRunFallbackWithDelete(t *testing.T) {
 	// Verify deleted
 	_, _, found, err := p.Get(ctx, "key1")
 	if err != nil {
-		t.Fatalf("Load() failed: %v", err)
+		t.Fatalf("Get() failed: %v", err)
 	}
 	if found {
 		t.Error("key should be deleted")

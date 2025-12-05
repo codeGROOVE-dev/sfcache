@@ -36,10 +36,10 @@ var (
 	}
 )
 
-// persister implements PersistenceLayer using local files with gob encoding.
+// store implements Store using local files with gob encoding.
 //
 //nolint:govet // fieldalignment - current layout groups related fields logically (mutex with map it protects)
-type persister[K comparable, V any] struct {
+type store[K comparable, V any] struct {
 	subdirsMu   sync.RWMutex
 	Dir         string          // Exported for testing - directory path
 	subdirsMade map[string]bool // Cache of created subdirectories
@@ -91,7 +91,7 @@ func New[K comparable, V any](cacheID string, dir string) (persist.Store[K, V], 
 		return nil, fmt.Errorf("remove test file: %w", err)
 	}
 
-	return &persister[K, V]{
+	return &store[K, V]{
 		Dir:         fullDir,
 		subdirsMade: make(map[string]bool),
 	}, nil
@@ -99,7 +99,7 @@ func New[K comparable, V any](cacheID string, dir string) (persist.Store[K, V], 
 
 // ValidateKey checks if a key is valid for file persistence.
 // Keys must be alphanumeric, dash, underscore, period, or colon, and max 127 characters.
-func (*persister[K, V]) ValidateKey(key K) error {
+func (*store[K, V]) ValidateKey(key K) error {
 	s := fmt.Sprintf("%v", key)
 	if len(s) > maxKeyLength {
 		return fmt.Errorf("key too long: %d bytes (max %d)", len(s), maxKeyLength)
@@ -119,7 +119,7 @@ func (*persister[K, V]) ValidateKey(key K) error {
 // keyToFilename converts a cache key to a filename with squid-style directory layout.
 // Hashes the key and uses first 2 characters of hex hash as subdirectory for even distribution
 // (e.g., key "http://example.com" -> "a3/a3f2...gob").
-func (*persister[K, V]) keyToFilename(key K) string {
+func (*store[K, V]) keyToFilename(key K) string {
 	s := fmt.Sprintf("%v", key)
 	sum := sha256.Sum256([]byte(s))
 	h := hex.EncodeToString(sum[:])
@@ -129,15 +129,15 @@ func (*persister[K, V]) keyToFilename(key K) string {
 }
 
 // Location returns the full file path where a key is stored.
-// Implements the PersistenceLayer interface Location() method.
-func (p *persister[K, V]) Location(key K) string {
+// Implements the Store interface Location() method.
+func (p *store[K, V]) Location(key K) string {
 	return filepath.Join(p.Dir, p.keyToFilename(key))
 }
 
 // Get retrieves a value from a file.
 //
 //nolint:revive // function-result-limit - required by persist.Store interface
-func (p *persister[K, V]) Get(ctx context.Context, key K) (value V, expiry time.Time, found bool, err error) {
+func (p *store[K, V]) Get(ctx context.Context, key K) (value V, expiry time.Time, found bool, err error) {
 	var zero V
 	filename := filepath.Join(p.Dir, p.keyToFilename(key))
 
@@ -189,7 +189,7 @@ func (p *persister[K, V]) Get(ctx context.Context, key K) (value V, expiry time.
 }
 
 // Set saves a value to a file.
-func (p *persister[K, V]) Set(ctx context.Context, key K, value V, expiry time.Time) error {
+func (p *store[K, V]) Set(ctx context.Context, key K, value V, expiry time.Time) error {
 	filename := filepath.Join(p.Dir, p.keyToFilename(key))
 	subdir := filepath.Dir(filename)
 
@@ -266,7 +266,7 @@ func (p *persister[K, V]) Set(ctx context.Context, key K, value V, expiry time.T
 }
 
 // Delete removes a file.
-func (p *persister[K, V]) Delete(ctx context.Context, key K) error {
+func (p *store[K, V]) Delete(ctx context.Context, key K) error {
 	filename := filepath.Join(p.Dir, p.keyToFilename(key))
 	err := os.Remove(filename)
 	if err != nil && !os.IsNotExist(err) {
@@ -279,7 +279,7 @@ func (p *persister[K, V]) Delete(ctx context.Context, key K) error {
 // Errors encountered while reading individual files are collected and returned via the error channel.
 //
 //nolint:gocritic // unnamedResult - channel returns are self-documenting
-func (p *persister[K, V]) LoadRecent(ctx context.Context, limit int) (<-chan persist.Entry[K, V], <-chan error) {
+func (p *store[K, V]) LoadRecent(ctx context.Context, limit int) (<-chan persist.Entry[K, V], <-chan error) {
 	entryCh := make(chan persist.Entry[K, V], 100)
 	errCh := make(chan error, 1)
 
@@ -389,7 +389,7 @@ func (p *persister[K, V]) LoadRecent(ctx context.Context, limit int) (<-chan per
 // Cleanup removes expired entries from file storage.
 // Walks through all cache files and deletes those with expired timestamps.
 // Returns the count of deleted entries and any errors encountered.
-func (p *persister[K, V]) Cleanup(ctx context.Context, maxAge time.Duration) (int, error) {
+func (p *store[K, V]) Cleanup(ctx context.Context, maxAge time.Duration) (int, error) {
 	cutoff := time.Now().Add(-maxAge)
 	deleted := 0
 	var errs []error
@@ -468,7 +468,7 @@ func (p *persister[K, V]) Cleanup(ctx context.Context, maxAge time.Duration) (in
 
 // Flush removes all entries from the file-based cache.
 // Returns the number of entries removed and any errors encountered.
-func (p *persister[K, V]) Flush(ctx context.Context) (int, error) {
+func (p *store[K, V]) Flush(ctx context.Context) (int, error) {
 	n := 0
 	var errs []error
 
@@ -505,7 +505,7 @@ func (p *persister[K, V]) Flush(ctx context.Context) (int, error) {
 }
 
 // Len returns the number of entries in the file-based cache.
-func (p *persister[K, V]) Len(ctx context.Context) (int, error) {
+func (p *store[K, V]) Len(ctx context.Context) (int, error) {
 	n := 0
 	var errs []error
 
@@ -534,7 +534,7 @@ func (p *persister[K, V]) Len(ctx context.Context) (int, error) {
 }
 
 // Close cleans up resources.
-func (*persister[K, V]) Close() error {
+func (*store[K, V]) Close() error {
 	// No resources to clean up for file-based persistence
 	return nil
 }

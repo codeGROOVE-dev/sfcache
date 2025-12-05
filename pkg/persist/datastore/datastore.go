@@ -18,15 +18,15 @@ const (
 	maxDatastoreKeyLen = 1500 // Datastore has stricter key length limits
 )
 
-// datastorePersist implements PersistenceLayer using Google Cloud Datastore.
-type persister[K comparable, V any] struct {
+// store implements Store using Google Cloud Datastore.
+type store[K comparable, V any] struct {
 	client *ds.Client
 	kind   string
 }
 
 // ValidateKey checks if a key is valid for Datastore persistence.
 // Datastore has stricter key length limits than files.
-func (*persister[K, V]) ValidateKey(key K) error {
+func (*store[K, V]) ValidateKey(key K) error {
 	s := fmt.Sprintf("%v", key)
 	if len(s) > maxDatastoreKeyLen {
 		return fmt.Errorf("key too long: %d bytes (max %d for datastore)", len(s), maxDatastoreKeyLen)
@@ -38,9 +38,9 @@ func (*persister[K, V]) ValidateKey(key K) error {
 }
 
 // Location returns the Datastore key path for a given cache key.
-// Implements the PersistenceLayer interface Location() method.
+// Implements the Store interface Location() method.
 // Format: "kind/key" (e.g., "CacheEntry/mykey").
-func (p *persister[K, V]) Location(key K) string {
+func (p *store[K, V]) Location(key K) string {
 	return fmt.Sprintf("%s/%v", p.kind, key)
 }
 
@@ -66,7 +66,7 @@ func New[K comparable, V any](ctx context.Context, cacheID string) (persist.Stor
 	// Verify connectivity (assert readiness)
 	// Note: ds9 doesn't expose Ping, but client creation validates connectivity
 
-	return &persister[K, V]{
+	return &store[K, V]{
 		client: client,
 		kind:   datastoreKind,
 	}, nil
@@ -74,14 +74,14 @@ func New[K comparable, V any](ctx context.Context, cacheID string) (persist.Stor
 
 // makeKey creates a Datastore key from a cache key.
 // We use the string representation directly as the key name.
-func (p *persister[K, V]) makeKey(key K) *ds.Key {
+func (p *store[K, V]) makeKey(key K) *ds.Key {
 	return ds.NameKey(p.kind, fmt.Sprintf("%v", key), nil)
 }
 
 // Get retrieves a value from Datastore.
 //
 //nolint:revive // function-result-limit - required by persist.Store interface
-func (p *persister[K, V]) Get(ctx context.Context, key K) (value V, expiry time.Time, found bool, err error) {
+func (p *store[K, V]) Get(ctx context.Context, key K) (value V, expiry time.Time, found bool, err error) {
 	var zero V
 	dsKey := p.makeKey(key)
 
@@ -114,7 +114,7 @@ func (p *persister[K, V]) Get(ctx context.Context, key K) (value V, expiry time.
 }
 
 // Set saves a value to Datastore.
-func (p *persister[K, V]) Set(ctx context.Context, key K, value V, expiry time.Time) error {
+func (p *store[K, V]) Set(ctx context.Context, key K, value V, expiry time.Time) error {
 	dsKey := p.makeKey(key)
 
 	// Encode value as JSON then base64
@@ -138,7 +138,7 @@ func (p *persister[K, V]) Set(ctx context.Context, key K, value V, expiry time.T
 }
 
 // Delete removes a value from Datastore.
-func (p *persister[K, V]) Delete(ctx context.Context, key K) error {
+func (p *store[K, V]) Delete(ctx context.Context, key K) error {
 	dsKey := p.makeKey(key)
 
 	if err := p.client.Delete(ctx, dsKey); err != nil {
@@ -149,7 +149,7 @@ func (p *persister[K, V]) Delete(ctx context.Context, key K) error {
 }
 
 // LoadRecent streams entries from Datastore, returning up to 'limit' most recently updated entries.
-func (p *persister[K, V]) LoadRecent(ctx context.Context, limit int) (entries <-chan persist.Entry[K, V], errs <-chan error) {
+func (p *store[K, V]) LoadRecent(ctx context.Context, limit int) (entries <-chan persist.Entry[K, V], errs <-chan error) {
 	entryCh := make(chan persist.Entry[K, V], 100)
 	errCh := make(chan error, 1)
 
@@ -230,7 +230,7 @@ func (p *persister[K, V]) LoadRecent(ctx context.Context, limit int) (entries <-
 // Cleanup removes expired entries from Datastore.
 // maxAge specifies how old entries must be (based on expiry field) before deletion.
 // If native Datastore TTL is properly configured, this will find no entries.
-func (p *persister[K, V]) Cleanup(ctx context.Context, maxAge time.Duration) (int, error) {
+func (p *store[K, V]) Cleanup(ctx context.Context, maxAge time.Duration) (int, error) {
 	cutoff := time.Now().Add(-maxAge)
 
 	// Query for entries with expiry before cutoff
@@ -260,7 +260,7 @@ func (p *persister[K, V]) Cleanup(ctx context.Context, maxAge time.Duration) (in
 
 // Flush removes all entries from Datastore.
 // Returns the number of entries removed and any error.
-func (p *persister[K, V]) Flush(ctx context.Context) (int, error) {
+func (p *store[K, V]) Flush(ctx context.Context) (int, error) {
 	// Query for all keys
 	query := ds.NewQuery(p.kind).KeysOnly()
 
@@ -283,7 +283,7 @@ func (p *persister[K, V]) Flush(ctx context.Context) (int, error) {
 }
 
 // Len returns the number of entries in Datastore.
-func (p *persister[K, V]) Len(ctx context.Context) (int, error) {
+func (p *store[K, V]) Len(ctx context.Context) (int, error) {
 	query := ds.NewQuery(p.kind).KeysOnly()
 	keys, err := p.client.GetAll(ctx, query, nil)
 	if err != nil {
@@ -293,6 +293,6 @@ func (p *persister[K, V]) Len(ctx context.Context) (int, error) {
 }
 
 // Close releases Datastore client resources.
-func (p *persister[K, V]) Close() error {
+func (p *store[K, V]) Close() error {
 	return p.client.Close()
 }

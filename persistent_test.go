@@ -206,7 +206,7 @@ func TestPersistentCache_Basic(t *testing.T) {
 	// Verify it's in persistence
 	val, _, found, err := store.Get(ctx, "key1")
 	if err != nil {
-		t.Fatalf("store.Load: %v", err)
+		t.Fatalf("store.Get: %v", err)
 	}
 	if !found {
 		t.Error("key1 should be persisted")
@@ -222,7 +222,7 @@ func TestPersistentCache_Basic(t *testing.T) {
 
 	_, _, found, err = store.Get(ctx, "key1")
 	if err != nil {
-		t.Fatalf("store.Load after delete: %v", err)
+		t.Fatalf("store.Get after delete: %v", err)
 	}
 	if found {
 		t.Error("key1 should be deleted from persistence")
@@ -336,7 +336,7 @@ func TestPersistentCache_SetAsync(t *testing.T) {
 	// Should also be persisted
 	val, _, found, err = store.Get(ctx, "key1")
 	if err != nil {
-		t.Fatalf("store.Load: %v", err)
+		t.Fatalf("store.Get: %v", err)
 	}
 	if !found || val != 42 {
 		t.Error("key1 should be persisted after SetAsync")
@@ -733,7 +733,7 @@ func TestPersistentCache_GetOrSet(t *testing.T) {
 	// Value should be persisted
 	persistedVal, _, found, err := store.Get(ctx, "key1")
 	if err != nil {
-		t.Fatalf("store.Load: %v", err)
+		t.Fatalf("store.Get: %v", err)
 	}
 	if !found || persistedVal != 42 {
 		t.Error("key1 should be persisted")
@@ -907,14 +907,14 @@ func TestPersistentCache_SetAsync_VariadicTTL(t *testing.T) {
 	// Both should be persisted
 	_, _, found, err = store.Get(ctx, "async-default")
 	if err != nil {
-		t.Fatalf("store.Load: %v", err)
+		t.Fatalf("store.Get: %v", err)
 	}
 	if !found {
 		t.Error("async-default should be persisted")
 	}
 	_, _, found, err = store.Get(ctx, "async-explicit")
 	if err != nil {
-		t.Fatalf("store.Load: %v", err)
+		t.Fatalf("store.Get: %v", err)
 	}
 	if !found {
 		t.Error("async-explicit should be persisted")
