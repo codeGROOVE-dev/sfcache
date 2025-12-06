@@ -44,9 +44,12 @@ func TestBenchmarkSuite(t *testing.T) {
 	fmt.Println("sfcache benchmark bake-off")
 	fmt.Println()
 
-	// 1. Single-threaded latency
-	printTestHeader("TestLatency", "Single-Threaded Latency")
-	runPerformanceBenchmark()
+	// 1. Single-threaded latency (two modes: with and without evictions)
+	printTestHeader("TestLatencyNoEviction", "Latency - No Evictions (Set cycles within cache size)")
+	runLatencyTable(false)
+
+	printTestHeader("TestLatencyWithEviction", "Latency - With Evictions (Set uses 20x unique keys)")
+	runLatencyTable(true)
 
 	// 2. Single-threaded throughput (Zipf)
 	printTestHeader("TestZipfThroughput1", "Zipf Throughput (1 thread)")
@@ -329,14 +332,14 @@ type perfResult struct {
 	setAlloc int64
 }
 
-func runPerformanceBenchmark() {
+func runLatencyTable(evictionPath bool) {
 	results := []perfResult{
-		measurePerf("sfcache", benchSFCacheGet, benchSFCacheSet),
-		measurePerf("otter", benchOtterGet, benchOtterSet),
-		measurePerf("ristretto", benchRistrettoGet, benchRistrettoSet),
-		measurePerf("tinylfu", benchTinyLFUGet, benchTinyLFUSet),
-		measurePerf("freecache", benchFreecacheGet, benchFreecacheSet),
-		measurePerf("lru", benchLRUGet, benchLRUSet),
+		measurePerf("sfcache", benchSFCacheGet, benchSFCacheSetFactory(evictionPath)),
+		measurePerf("otter", benchOtterGet, benchOtterSetFactory(evictionPath)),
+		measurePerf("ristretto", benchRistrettoGet, benchRistrettoSetFactory(evictionPath)),
+		measurePerf("tinylfu", benchTinyLFUGet, benchTinyLFUSetFactory(evictionPath)),
+		measurePerf("freecache", benchFreecacheGet, benchFreecacheSetFactory(evictionPath)),
+		measurePerf("lru", benchLRUGet, benchLRUSetFactory(evictionPath)),
 	}
 
 	for i := range len(results) - 1 {
@@ -347,9 +350,6 @@ func runPerformanceBenchmark() {
 		}
 	}
 
-	fmt.Println()
-	fmt.Println("### Single-Threaded Latency (sorted by Get)")
-	fmt.Println()
 	fmt.Println("| Cache         | Get ns/op | Get B/op | Get allocs | Set ns/op | Set B/op | Set allocs |")
 	fmt.Println("|---------------|-----------|----------|------------|-----------|----------|------------|")
 
@@ -430,6 +430,20 @@ func benchSFCacheSet(b *testing.B) {
 	}
 }
 
+func benchSFCacheSetFactory(evictionPath bool) func(*testing.B) {
+	keySpace := perfCacheSize
+	if evictionPath {
+		keySpace = perfCacheSize * 20 // 20x to reduce noise from cache warmup
+	}
+	return func(b *testing.B) {
+		cache := sfcache.New[int, int](sfcache.Size(perfCacheSize))
+		b.ResetTimer()
+		for i := range b.N {
+			cache.Set(i%keySpace, i)
+		}
+	}
+}
+
 func benchOtterGet(b *testing.B) {
 	cache := otter.Must(&otter.Options[int, int]{MaximumSize: perfCacheSize})
 	for i := range perfCacheSize {
@@ -446,6 +460,20 @@ func benchOtterSet(b *testing.B) {
 	b.ResetTimer()
 	for i := range b.N {
 		cache.Set(i%perfCacheSize, i)
+	}
+}
+
+func benchOtterSetFactory(evictionPath bool) func(*testing.B) {
+	keySpace := perfCacheSize
+	if evictionPath {
+		keySpace = perfCacheSize * 20
+	}
+	return func(b *testing.B) {
+		cache := otter.Must(&otter.Options[int, int]{MaximumSize: perfCacheSize})
+		b.ResetTimer()
+		for i := range b.N {
+			cache.Set(i%keySpace, i)
+		}
 	}
 }
 
@@ -479,6 +507,25 @@ func benchRistrettoSet(b *testing.B) {
 	}
 }
 
+func benchRistrettoSetFactory(evictionPath bool) func(*testing.B) {
+	keySpace := perfCacheSize
+	if evictionPath {
+		keySpace = perfCacheSize * 20
+	}
+	return func(b *testing.B) {
+		cache, _ := ristretto.NewCache(&ristretto.Config{
+			NumCounters: int64(perfCacheSize * 10),
+			MaxCost:     int64(perfCacheSize),
+			BufferItems: 64,
+		})
+		defer cache.Close()
+		b.ResetTimer()
+		for i := range b.N {
+			cache.Set(i%keySpace, i, 1)
+		}
+	}
+}
+
 func benchLRUGet(b *testing.B) {
 	cache, _ := lru.New[int, int](perfCacheSize)
 	for i := range perfCacheSize {
@@ -495,6 +542,20 @@ func benchLRUSet(b *testing.B) {
 	b.ResetTimer()
 	for i := range b.N {
 		cache.Add(i%perfCacheSize, i)
+	}
+}
+
+func benchLRUSetFactory(evictionPath bool) func(*testing.B) {
+	keySpace := perfCacheSize
+	if evictionPath {
+		keySpace = perfCacheSize * 20
+	}
+	return func(b *testing.B) {
+		cache, _ := lru.New[int, int](perfCacheSize)
+		b.ResetTimer()
+		for i := range b.N {
+			cache.Add(i%keySpace, i)
+		}
 	}
 }
 
@@ -522,6 +583,24 @@ func benchTinyLFUSet(b *testing.B) {
 	b.ResetTimer()
 	for i := range b.N {
 		cache.Set(&tinylfu.Item{Key: keys[i%perfCacheSize], Value: i})
+	}
+}
+
+func benchTinyLFUSetFactory(evictionPath bool) func(*testing.B) {
+	keySpace := perfCacheSize
+	if evictionPath {
+		keySpace = perfCacheSize * 20
+	}
+	return func(b *testing.B) {
+		cache := tinylfu.NewSync(perfCacheSize, perfCacheSize*10)
+		keys := make([]string, keySpace)
+		for i := range keySpace {
+			keys[i] = strconv.Itoa(i)
+		}
+		b.ResetTimer()
+		for i := range b.N {
+			cache.Set(&tinylfu.Item{Key: keys[i%keySpace], Value: i})
+		}
 	}
 }
 
@@ -554,6 +633,27 @@ func benchFreecacheSet(b *testing.B) {
 	b.ResetTimer()
 	for i := range b.N {
 		cache.Set(keys[i%perfCacheSize], vals[i%perfCacheSize], 0)
+	}
+}
+
+func benchFreecacheSetFactory(evictionPath bool) func(*testing.B) {
+	keySpace := perfCacheSize
+	if evictionPath {
+		keySpace = perfCacheSize * 20
+	}
+	return func(b *testing.B) {
+		cache := freecache.NewCache(perfCacheSize * 256)
+		keys := make([][]byte, keySpace)
+		vals := make([][]byte, keySpace)
+		for i := range keySpace {
+			keys[i] = []byte(strconv.Itoa(i))
+			vals[i] = make([]byte, 8)
+			binary.LittleEndian.PutUint64(vals[i], uint64(i))
+		}
+		b.ResetTimer()
+		for i := range b.N {
+			cache.Set(keys[i%keySpace], vals[i%keySpace], 0)
+		}
 	}
 }
 

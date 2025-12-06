@@ -1,4 +1,25 @@
-.PHONY: test lint bench benchmark clean
+.PHONY: test lint bench benchmark clean tag
+
+# Tag all modules in the repository with a version
+# Usage: make tag VERSION=v1.2.3
+tag:
+	@if [ -z "$(VERSION)" ]; then \
+		echo "ERROR: VERSION is required. Usage: make tag VERSION=v1.2.3"; \
+		exit 1; \
+	fi
+	@echo "Tagging all modules with $(VERSION)..."
+	@git tag $(VERSION)
+	@find . -name go.mod -not -path "./go.mod" | while read mod; do \
+		dir=$$(dirname $$mod); \
+		dir=$${dir#./}; \
+		echo "  $$dir/$(VERSION)"; \
+		git tag $$dir/$(VERSION); \
+	done
+	@echo ""
+	@echo "Created tags:"
+	@git tag -l "$(VERSION)" "*/$(VERSION)" | sed 's/^/  /'
+	@echo ""
+	@echo "To push tags, run: git push origin --tags"
 
 test:
 	@echo "Running tests in all modules..."

@@ -89,20 +89,24 @@ type s3fifo[K comparable, V any] struct {
 //
 //nolint:govet // fieldalignment: padding is intentional to prevent false sharing
 type shard[K comparable, V any] struct {
-	mu        sync.RWMutex       // RWMutex is faster for read-heavy workloads with sharding
-	_         [40]byte           // Padding to cache line boundary
-	entries   map[K]*entry[K, V] // Direct map access (protected by mu)
-	small     entryList[K, V]    // Intrusive list for small queue
-	main      entryList[K, V]    // Intrusive list for main queue
-	ghost     ghostList[K]       // Intrusive list for ghost queue
-	ghostKeys map[K]*ghostEntry[K]
-	capacity  int
-	smallCap  int
-	ghostCap  int
+	mu      sync.RWMutex       // RWMutex is faster for read-heavy workloads with sharding
+	_       [40]byte           // Padding to cache line boundary
+	entries map[K]*entry[K, V] // Direct map access (protected by mu)
+	small   entryList[K, V]    // Intrusive list for small queue
+	main    entryList[K, V]    // Intrusive list for main queue
 
-	// Free lists for reducing allocations
-	freeEntries      *entry[K, V]
-	freeGhostEntries *ghostEntry[K]
+	// Two-map ghost: tracks evicted keys without linked list overhead.
+	// On swap: clear aging map, swap pointers. Provides approximate FIFO.
+	ghostActive map[K]struct{} // current generation ghost entries
+	ghostAging  map[K]struct{} // previous generation ghost entries
+	ghostCount  int            // entries in active map
+
+	capacity int
+	smallCap int
+	ghostCap int
+
+	// Free list for reducing allocations
+	freeEntries *entry[K, V]
 }
 
 // entryList is an intrusive doubly-linked list for cache entries.
@@ -146,58 +150,6 @@ func (l *entryList[K, V]) front() *entry[K, V] {
 }
 
 func (l *entryList[K, V]) init() {
-	l.head = nil
-	l.tail = nil
-	l.len = 0
-}
-
-// ghostEntry is a node in the ghost queue (tracks evicted keys only).
-type ghostEntry[K comparable] struct {
-	key  K
-	prev *ghostEntry[K]
-	next *ghostEntry[K]
-}
-
-// ghostList is an intrusive doubly-linked list for ghost entries.
-type ghostList[K comparable] struct {
-	head *ghostEntry[K]
-	tail *ghostEntry[K]
-	len  int
-}
-
-func (l *ghostList[K]) pushBack(e *ghostEntry[K]) {
-	e.prev = l.tail
-	e.next = nil
-	if l.tail != nil {
-		l.tail.next = e
-	} else {
-		l.head = e
-	}
-	l.tail = e
-	l.len++
-}
-
-func (l *ghostList[K]) remove(e *ghostEntry[K]) {
-	if e.prev != nil {
-		e.prev.next = e.next
-	} else {
-		l.head = e.next
-	}
-	if e.next != nil {
-		e.next.prev = e.prev
-	} else {
-		l.tail = e.prev
-	}
-	e.prev = nil
-	e.next = nil
-	l.len--
-}
-
-func (l *ghostList[K]) front() *ghostEntry[K] {
-	return l.head
-}
-
-func (l *ghostList[K]) init() {
 	l.head = nil
 	l.tail = nil
 	l.len = 0
@@ -265,13 +217,15 @@ func newS3FIFO[K comparable, V any](cfg *config) *s3fifo[K, V] {
 	}
 
 	// Auto-tune ratios based on capacity
+	// Note: Two-map ghost tracks 2x ghostRatio total (both maps can be nearly full).
+	// This is intentional - longer ghost history improves promotion decisions.
 	var smallRatio, ghostRatio float64
 	if capacity <= 16384 {
 		smallRatio = 0.01 // 1% for small caches (Zipf-friendly)
-		ghostRatio = 0.5  // 50% for small caches
+		ghostRatio = 0.5  // 50% per map = ~100% total for small caches
 	} else {
 		smallRatio = 0.05 // 5% for large caches (Meta trace optimal)
-		ghostRatio = 1.0  // 100% for large caches
+		ghostRatio = 1.0  // 100% per map = ~200% total for large caches
 	}
 
 	for i := range numShards {
@@ -296,11 +250,12 @@ func newShard[K comparable, V any](capacity int, smallRatio, ghostRatio float64)
 	}
 
 	s := &shard[K, V]{
-		capacity:  capacity,
-		smallCap:  smallCap,
-		ghostCap:  ghostCap,
-		entries:   make(map[K]*entry[K, V], capacity),
-		ghostKeys: make(map[K]*ghostEntry[K], ghostCap),
+		capacity:    capacity,
+		smallCap:    smallCap,
+		ghostCap:    ghostCap,
+		entries:     make(map[K]*entry[K, V], capacity),
+		ghostActive: make(map[K]struct{}, ghostCap),
+		ghostAging:  make(map[K]struct{}, ghostCap),
 	}
 	return s
 }
@@ -328,26 +283,6 @@ func (s *shard[K, V]) putEntry(e *entry[K, V]) {
 
 	e.next = s.freeEntries
 	s.freeEntries = e
-}
-
-func (s *shard[K, V]) getGhostEntry() *ghostEntry[K] {
-	if s.freeGhostEntries != nil {
-		e := s.freeGhostEntries
-		s.freeGhostEntries = e.next
-		e.next = nil
-		e.prev = nil
-		return e
-	}
-	return &ghostEntry[K]{}
-}
-
-func (s *shard[K, V]) putGhostEntry(e *ghostEntry[K]) {
-	var zeroK K
-	e.key = zeroK
-	e.prev = nil
-
-	e.next = s.freeGhostEntries
-	s.freeGhostEntries = e
 }
 
 // shard returns the shard for a given key using type-optimized hashing.
@@ -442,14 +377,13 @@ func (s *shard[K, V]) set(key K, value V, expiryNano int64) {
 
 	// Slow path: insert new key (already holding lock)
 
-	// Check if key is in ghost queue
-	inGhost := false
-	if ghostEnt, ok := s.ghostKeys[key]; ok {
-		inGhost = true
-		s.ghost.remove(ghostEnt)
-		delete(s.ghostKeys, key)
-		s.putGhostEntry(ghostEnt)
+	// Check if key is in ghost (two-map lookup)
+	_, inGhost := s.ghostActive[key]
+	if !inGhost {
+		_, inGhost = s.ghostAging[key]
 	}
+	// Note: We don't remove from ghost on hit - the key will naturally age out.
+	// This is acceptable since ghost is just a hint for promotion decisions.
 
 	// Create new entry
 	ent := s.getEntry()
@@ -458,7 +392,7 @@ func (s *shard[K, V]) set(key K, value V, expiryNano int64) {
 	ent.expiryNano = expiryNano
 	ent.inSmall = !inGhost
 
-	// Make room if at capacity
+	// Evict when at capacity (no overflow buffer)
 	for s.small.len+s.main.len >= s.capacity {
 		s.evict()
 	}
@@ -555,17 +489,16 @@ func (s *shard[K, V]) evictFromMain() {
 
 // addToGhost adds a key to the ghost queue.
 func (s *shard[K, V]) addToGhost(key K) {
-	if s.ghost.len >= s.ghostCap {
-		oldest := s.ghost.front()
-		delete(s.ghostKeys, oldest.key)
-		s.ghost.remove(oldest)
-		s.putGhostEntry(oldest)
-	}
+	// Add to active generation
+	s.ghostActive[key] = struct{}{}
+	s.ghostCount++
 
-	ent := s.getGhostEntry()
-	ent.key = key
-	s.ghost.pushBack(ent)
-	s.ghostKeys[key] = ent
+	// Swap generations when active is full (provides approximate FIFO)
+	if s.ghostCount >= s.ghostCap {
+		clear(s.ghostAging)
+		s.ghostAging, s.ghostActive = s.ghostActive, s.ghostAging
+		s.ghostCount = 0
+	}
 }
 
 // len returns the total number of entries across all shards.
@@ -597,7 +530,8 @@ func (s *shard[K, V]) flush() int {
 	s.entries = make(map[K]*entry[K, V], s.capacity)
 	s.small.init()
 	s.main.init()
-	s.ghost.init()
-	s.ghostKeys = make(map[K]*ghostEntry[K], s.ghostCap)
+	clear(s.ghostActive)
+	clear(s.ghostAging)
+	s.ghostCount = 0
 	return n
 }
