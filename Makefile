@@ -8,12 +8,12 @@ tag:
 		exit 1; \
 	fi
 	@echo "Tagging all modules with $(VERSION)..."
-	@git tag $(VERSION)
+	@git tag -a $(VERSION) -m "$(VERSION)"
 	@find . -name go.mod -not -path "./go.mod" | while read mod; do \
 		dir=$$(dirname $$mod); \
 		dir=$${dir#./}; \
 		echo "  $$dir/$(VERSION)"; \
-		git tag $$dir/$(VERSION); \
+		git tag -a $$dir/$(VERSION) -m "$(VERSION)"; \
 	done
 	@echo ""
 	@echo "Created tags:"
