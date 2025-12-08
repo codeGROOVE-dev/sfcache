@@ -24,9 +24,8 @@ Designed for persistently caching API requests in an unreliable environment, thi
 - **Per-item TTL** - Optional expiration
 - **Thundering herd prevention** - `GetSet` deduplicates concurrent loads for the same key
 - **Graceful degradation** - Cache works even if persistence fails
-- **Zero allocation reads** - minimal GC thrashing
-- **Type safe** - Go generics
-
+- **Zero allocation updates** - minimal GC thrashing
+- 
 ## Usage
 
 As a stupid-fast in-memory cache:
