@@ -3,6 +3,7 @@ package sfcache
 import (
 	"fmt"
 	"math/bits"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -176,33 +177,26 @@ type entry[K comparable, V any] struct {
 func newS3FIFO[K comparable, V any](cfg *config) *s3fifo[K, V] {
 	capacity := cfg.size
 	if capacity <= 0 {
-		capacity = 16384 // 2^14, divides evenly by 16 shards
+		capacity = 16384
 	}
 
-	// Use 1024 min entries per shard to balance concurrency with hash variance.
-	// With fewer entries per shard, statistical variance causes capacity loss
-	// (e.g., 256/shard loses ~2%, 1024/shard loses ~0.6%).
-	// Round down to nearest power of 2 for fast modulo via bitwise AND.
-	minEntriesPerShard := 1024
-	numShards := capacity / minEntriesPerShard
-	if numShards < 1 {
-		numShards = 1
+	// More shards reduces lock contention but each shard needs enough
+	// entries for S3-FIFO to work (32 min gives 3 small + 29 main).
+	nshards := min(runtime.GOMAXPROCS(0)*8, capacity/32, maxShards)
+	if nshards < 1 {
+		nshards = 1
 	}
-	if numShards > maxShards {
-		numShards = maxShards
-	}
-	// Round down to power of 2
-	//nolint:gosec // G115: numShards is bounded by [1, maxShards], conversion is safe
-	numShards = 1 << (bits.Len(uint(numShards)) - 1)
+	// Round to power of 2 for fast modulo.
+	//nolint:gosec // G115: nshards bounded by [1, maxShards]
+	nshards = 1 << (bits.Len(uint(nshards)) - 1)
 
-	// Use ceiling division to ensure total capacity >= requested
-	shardCap := (capacity + numShards - 1) / numShards
+	shardCap := (capacity + nshards - 1) / nshards // ceiling division
 
 	c := &s3fifo[K, V]{
-		shards:    make([]*shard[K, V], numShards),
-		numShards: numShards,
-		//nolint:gosec // G115: numShards is bounded by [1, maxShards], conversion is safe
-		shardMask: uint64(numShards - 1),
+		shards:    make([]*shard[K, V], nshards),
+		numShards: nshards,
+		//nolint:gosec // G115: nshards bounded by [1, maxShards]
+		shardMask: uint64(nshards - 1),
 	}
 
 	// Detect key type at construction time to enable fast-path hash functions.
@@ -257,7 +251,7 @@ func newS3FIFO[K comparable, V any](cfg *config) *s3fifo[K, V] {
 		}
 	}
 
-	for i := range numShards {
+	for i := range nshards {
 		c.shards[i] = newShard[K, V](shardCap, smallRatio, ghostRatio, hasher)
 	}
 
