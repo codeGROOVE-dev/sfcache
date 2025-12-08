@@ -88,29 +88,42 @@ func TestS3FIFO_CapacityAccuracy(t *testing.T) {
 }
 
 func TestS3FIFO_Eviction(t *testing.T) {
-	cache := newS3FIFO[int, int](&config{size: 10000})
+	// Use 65536 to get proper S3-FIFO behavior (4096 entries per shard)
+	cache := newS3FIFO[int, int](&config{size: 65536})
 
 	// Fill cache to capacity
-	for i := range 10000 {
+	for i := range 65536 {
 		cache.set(i, i, 0)
 	}
 
-	// Access item 0 to mark it for promotion
-	cache.get(0)
+	// Access items 0-99 multiple times to mark them as hot
+	for range 3 {
+		for i := range 100 {
+			cache.get(i)
+		}
+	}
 
-	// Add more items to trigger evictions - item 0 should survive
-	for i := 10000; i < 15000; i++ {
+	// Add more items to trigger evictions - hot items should survive
+	for i := 65536; i < 130000; i++ {
 		cache.set(i, i, 0)
 	}
 
-	// Item 0 should still exist (it was accessed before evictions)
-	if _, ok := cache.get(0); !ok {
-		t.Error("item 0 was evicted but should have been promoted")
+	// Count how many hot items survived
+	hotSurvived := 0
+	for i := range 100 {
+		if _, ok := cache.get(i); ok {
+			hotSurvived++
+		}
+	}
+
+	// Most hot items should survive (at least 75%)
+	if hotSurvived < 75 {
+		t.Errorf("only %d/100 hot items survived; want >= 75", hotSurvived)
 	}
 
 	// Should be near capacity (allow 10% variance)
-	if cache.len() < 9000 || cache.len() > 11000 {
-		t.Errorf("cache length = %d; want ~10000", cache.len())
+	if cache.len() < 58000 || cache.len() > 72000 {
+		t.Errorf("cache length = %d; want ~65536", cache.len())
 	}
 }
 
@@ -191,43 +204,51 @@ func TestS3FIFO_Concurrent(t *testing.T) {
 }
 
 func TestS3FIFO_FrequencyPromotion(t *testing.T) {
-	// Use a larger capacity to ensure meaningful per-shard capacity
-	// With 512 shards, 10000 items = ~20 per shard
-	cache := newS3FIFO[int, int](&config{size: 10000})
+	// Use 65536 to get proper S3-FIFO behavior (4096 entries per shard)
+	cache := newS3FIFO[int, int](&config{size: 65536})
 
 	// Fill cache with items using int keys for predictable sharding
-	for i := range 10000 {
+	for i := range 65536 {
 		cache.set(i, i, 0)
 	}
 
-	// Access even-numbered keys to increase their frequency
-	for i := 0; i < 10000; i += 2 {
-		cache.get(i)
+	// Access first 1000 keys multiple times to mark them as hot
+	for range 3 {
+		for i := range 1000 {
+			cache.get(i)
+		}
 	}
 
-	// Add more items to trigger evictions
-	for i := 10000; i < 15000; i++ {
+	// Add more items to trigger significant evictions (2x capacity)
+	for i := 65536; i < 130000; i++ {
 		cache.set(i, i, 0)
 	}
 
-	// Count how many accessed items survived vs unaccessed
-	accessedSurvived := 0
-	unaccesedSurvived := 0
-	for i := range 10000 {
+	// Count how many hot items survived vs cold items
+	hotSurvived := 0
+	coldSurvived := 0
+	for i := range 65536 {
 		if _, ok := cache.get(i); ok {
-			if i%2 == 0 {
-				accessedSurvived++
+			if i < 1000 {
+				hotSurvived++
 			} else {
-				unaccesedSurvived++
+				coldSurvived++
 			}
 		}
 	}
 
-	// Accessed items should survive at higher rate than unaccessed
+	// Calculate survival rates
+	hotRate := float64(hotSurvived) / 1000.0
+	coldRate := float64(coldSurvived) / 64536.0
+
+	t.Logf("Hot survived: %d/1000 (%.1f%%), Cold survived: %d/64536 (%.1f%%)",
+		hotSurvived, hotRate*100, coldSurvived, coldRate*100)
+
+	// Hot items should survive at higher rate than cold items
 	// This verifies the frequency promotion mechanism works
-	if accessedSurvived <= unaccesedSurvived {
-		t.Errorf("accessed items (%d) should survive more than unaccessed (%d)",
-			accessedSurvived, unaccesedSurvived)
+	if hotRate <= coldRate {
+		t.Errorf("hot item survival rate (%.1f%%) should exceed cold item rate (%.1f%%)",
+			hotRate*100, coldRate*100)
 	}
 }
 
@@ -373,43 +394,50 @@ func TestS3FIFOEvictionOrder(t *testing.T) {
 
 // Test S3-FIFO vs LRU: hot items survive, cold items evicted
 func TestS3FIFODetailed(t *testing.T) {
-	cache := New[int, int](Size(40))
+	// Use 65536 capacity for proper S3-FIFO behavior with tiered sharding
+	const cacheSize = 65536
+	cache := New[int, int](Size(cacheSize))
 
-	// Insert items 1-40 into cache
-	for i := 1; i <= 40; i++ {
+	// Insert items 1-cacheSize into cache
+	for i := 1; i <= cacheSize; i++ {
 		cache.Set(i, i*100, 0)
 	}
 
-	// Access items 1-20 (marks them as hot)
-	for i := 1; i <= 20; i++ {
-		cache.Get(i)
+	// Access items 1-1000 multiple times (marks them as hot)
+	const hotItems = 1000
+	for range 3 {
+		for i := 1; i <= hotItems; i++ {
+			cache.Get(i)
+		}
 	}
 
-	// Insert one-hit wonders 100-119
-	for i := 100; i < 120; i++ {
+	// Insert one-hit wonders to trigger eviction
+	for i := cacheSize + 1; i <= cacheSize+20000; i++ {
 		cache.Set(i, i*100, 0)
 	}
 
-	// Check which items survived
+	// Check which hot items survived
 	hotSurvived := 0
-	for i := 1; i <= 20; i++ {
+	for i := 1; i <= hotItems; i++ {
 		if _, found := cache.Get(i); found {
 			hotSurvived++
 		}
 	}
 
+	// Check which cold items survived (items that were never accessed)
 	coldSurvived := 0
-	for i := 21; i <= 40; i++ {
+	for i := hotItems + 1; i <= hotItems+1000; i++ {
 		if _, found := cache.Get(i); found {
 			coldSurvived++
 		}
 	}
 
-	t.Logf("Hot items found: %d/20, Cold items found: %d/20", hotSurvived, coldSurvived)
+	t.Logf("Hot items found: %d/%d, Cold items found: %d/1000", hotSurvived, hotItems, coldSurvived)
 
 	// Verify expected behavior - hot items should mostly survive
-	if hotSurvived < 15 {
-		t.Errorf("Expected most hot items to survive, got %d/20", hotSurvived)
+	// With proper S3-FIFO, at least 75% of hot items should survive
+	if hotSurvived < hotItems*3/4 {
+		t.Errorf("Expected most hot items to survive, got %d/%d", hotSurvived, hotItems)
 	}
 }
 

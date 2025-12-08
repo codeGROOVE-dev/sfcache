@@ -45,10 +45,7 @@ func wyhashString(s string) uint64 {
 	return hi ^ lo
 }
 
-const (
-	maxShards          = 2048
-	minEntriesPerShard = 256 // Minimum entries per shard; allows more shards for better concurrency
-)
+const maxShards = 2048
 
 // s3fifo implements the S3-FIFO eviction algorithm from SOSP'23 paper
 // "FIFO queues are all you need for cache eviction"
@@ -182,8 +179,14 @@ func newS3FIFO[K comparable, V any](cfg *config) *s3fifo[K, V] {
 		capacity = 16384 // 2^14, divides evenly by 16 shards
 	}
 
-	// Calculate number of shards: ensure each shard has at least minEntriesPerShard
+	// Calculate number of shards using tiered approach:
+	// - Small caches (<64K): prioritize concurrency with smaller shards (256 entries min)
+	// - Large caches (>=64K): prioritize S3-FIFO effectiveness (4096 entries min)
 	// Round down to nearest power of 2 for fast modulo via bitwise AND
+	minEntriesPerShard := 4096
+	if capacity < 65536 {
+		minEntriesPerShard = 256
+	}
 	numShards := capacity / minEntriesPerShard
 	if numShards < 1 {
 		numShards = 1
@@ -218,10 +221,13 @@ func newS3FIFO[K comparable, V any](cfg *config) *s3fifo[K, V] {
 	}
 
 	// Auto-tune ratios based on capacity.
-	// Use a formulaic approach to scale smallRatio with capacity.
-	// Starts at ~0.10 and grows to ~0.20 at 250k.
+	// S3-FIFO paper recommends small queue at 10% of total capacity.
+	// We use a small scaling factor for larger caches (up to 20%).
 	var smallRatio, ghostRatio float64
-	smallRatio = 0.10 + (float64(capacity) / 250000.0)
+	smallRatio = 0.10 + 0.10*(float64(capacity)/250000.0)
+	if smallRatio > 0.20 {
+		smallRatio = 0.20
+	}
 	ghostRatio = 2.5 // Constant 250% ghost tracking
 
 	// Prepare hasher for Bloom filter
