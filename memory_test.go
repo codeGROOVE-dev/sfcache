@@ -570,7 +570,7 @@ func TestMemoryCache_GetSet_IntKeys(t *testing.T) {
 	defer cache.Close()
 
 	var loaderCalls int32
-	loader := func() (int, error) {
+	loader := func() (int, error) { //nolint:unparam // error is always nil in test
 		atomic.AddInt32(&loaderCalls, 1)
 		time.Sleep(10 * time.Millisecond)
 		return 42, nil
