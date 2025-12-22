@@ -767,10 +767,10 @@ func TestS3FIFO_ShardingConstraints(t *testing.T) {
 					capacity, cache.numShards)
 			}
 
-			// Each shard should have at least 64 entries (or 1 shard for tiny caches)
+			// Each shard should have at least 16 entries (or 1 shard for tiny caches)
 			entriesPerShard := capacity / cache.numShards
-			if entriesPerShard < 64 && cache.numShards > 1 {
-				t.Errorf("capacity %d: only %d entries per shard (min 64)",
+			if entriesPerShard < 16 && cache.numShards > 1 {
+				t.Errorf("capacity %d: only %d entries per shard (min 16)",
 					capacity, entriesPerShard)
 			}
 

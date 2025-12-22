@@ -23,13 +23,15 @@ type MemoryCache[K comparable, V any] struct {
 type flightGroup[K comparable, V any] struct {
 	mu    sync.Mutex
 	calls map[K]*flightCall[V]
+	pool  sync.Pool
 }
 
 //nolint:govet // fieldalignment: semantic grouping preferred
 type flightCall[V any] struct {
-	wg  sync.WaitGroup
-	val V
-	err error
+	wg     sync.WaitGroup
+	val    V
+	err    error
+	shared bool // true if other goroutines are waiting on this call
 }
 
 // do executes fn once per key, with concurrent callers waiting for the result.
@@ -39,11 +41,19 @@ func (g *flightGroup[K, V]) do(key K, fn func() (V, error)) (V, error) {
 		g.calls = make(map[K]*flightCall[V])
 	}
 	if c, ok := g.calls[key]; ok {
+		c.shared = true // Mark that others are waiting
 		g.mu.Unlock()
 		c.wg.Wait()
 		return c.val, c.err
 	}
-	c := &flightCall[V]{}
+
+	// Get from pool or allocate
+	var c *flightCall[V]
+	if pooled, ok := g.pool.Get().(*flightCall[V]); ok && pooled != nil {
+		c = pooled
+	} else {
+		c = &flightCall[V]{}
+	}
 	c.wg.Add(1)
 	g.calls[key] = c
 	g.mu.Unlock()
@@ -52,10 +62,22 @@ func (g *flightGroup[K, V]) do(key K, fn func() (V, error)) (V, error) {
 
 	g.mu.Lock()
 	delete(g.calls, key)
+	shared := c.shared
 	g.mu.Unlock()
 	c.wg.Done()
 
-	return c.val, c.err
+	val, err := c.val, c.err
+
+	// Only pool if no waiters (they still need to read c.val/c.err)
+	if !shared {
+		var zero V
+		c.val = zero
+		c.err = nil
+		c.shared = false
+		g.pool.Put(c)
+	}
+
+	return val, err
 }
 
 // New creates a new in-memory cache.
@@ -103,6 +125,21 @@ func (c *MemoryCache[K, V]) Set(key K, value V, ttl ...time.Duration) {
 // Delete removes a value from the cache.
 func (c *MemoryCache[K, V]) Delete(key K) {
 	c.memory.del(key)
+}
+
+// SetIfAbsent stores value only if key doesn't exist.
+// Returns the existing value and true if found, or the new value and false if stored.
+// Unlike GetSet, this has no thundering herd protection - use when value is precomputed.
+func (c *MemoryCache[K, V]) SetIfAbsent(key K, value V, ttl ...time.Duration) (V, bool) {
+	if val, ok := c.memory.get(key); ok {
+		return val, true
+	}
+	var t time.Duration
+	if len(ttl) > 0 {
+		t = ttl[0]
+	}
+	c.memory.set(key, value, timeToNano(c.expiry(t)))
+	return value, false
 }
 
 // GetSet retrieves a value from the cache, or calls loader to compute and store it.

@@ -50,7 +50,7 @@ func (b *bloomFilter) Add(h uint64) {
 	// For standard double hashing: gi(x) = h1(x) + i*h2(x)
 
 	for i := range b.k {
-		//nolint:gosec // G115: i is bounded by b.k which is capped at 8
+		//nolint:gosec // G115: i is bounded by b.k which is capped at 16
 		idx := (h1 + uint64(i)*h2) & b.mask
 		b.data[idx/64] |= 1 << (idx % 64)
 	}
@@ -63,7 +63,7 @@ func (b *bloomFilter) Contains(h uint64) bool {
 	h2 := h >> 32
 
 	for i := range b.k {
-		//nolint:gosec // G115: i is bounded by b.k which is capped at 8
+		//nolint:gosec // G115: i is bounded by b.k which is capped at 16
 		idx := (h1 + uint64(i)*h2) & b.mask
 		if b.data[idx/64]&(1<<(idx%64)) == 0 {
 			return false

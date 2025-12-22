@@ -172,9 +172,9 @@ func newS3FIFO[K comparable, V any](cfg *config) *s3fifo[K, V] {
 
 	// More shards reduces lock contention. Each shard should have at least
 	// a few entries for S3-FIFO to work, but we prioritize concurrency.
-	// Use at least GOMAXPROCS shards for parallel workloads.
-	minShards := runtime.GOMAXPROCS(0)
-	maxByCapacity := max(1, capacity/64) // At least 64 entries per shard
+	// Use 4x GOMAXPROCS for better scaling under high contention.
+	minShards := runtime.GOMAXPROCS(0) * 4
+	maxByCapacity := max(1, capacity/16) // At least 16 entries per shard
 	nshards := min(minShards, maxByCapacity, maxShards)
 	// Round to power of 2 for fast modulo.
 	//nolint:gosec // G115: nshards bounded by [1, maxShards]
@@ -203,9 +203,8 @@ func newS3FIFO[K comparable, V any](cfg *config) *s3fifo[K, V] {
 
 	// S3-FIFO paper recommends small queue at 10% of total capacity.
 	// Ghost queue at 100% matches reference implementation for better hit rate.
-	var smallRatio, ghostRatio float64
-	smallRatio = 0.10
-	ghostRatio = 1.0
+	const smallRatio = 0.10
+	const ghostRatio = 1.0
 
 	// Prepare hasher for Bloom filter
 	var hasher func(K) uint64
@@ -242,30 +241,20 @@ func newS3FIFO[K comparable, V any](cfg *config) *s3fifo[K, V] {
 	}
 
 	for i := range nshards {
-		c.shards[i] = newShard[K, V](shardCap, smallRatio, ghostRatio, hasher)
+		smallCap := max(int(float64(shardCap)*smallRatio), 1)
+		ghostCap := max(int(float64(shardCap)*ghostRatio), 1)
+		c.shards[i] = &shard[K, V]{
+			capacity:    shardCap,
+			smallCap:    smallCap,
+			ghostCap:    ghostCap,
+			entries:     make(map[K]*entry[K, V], shardCap),
+			ghostActive: newBloomFilter(ghostCap, 0.00001),
+			ghostAging:  newBloomFilter(ghostCap, 0.00001),
+			hasher:      hasher,
+		}
 	}
 
 	return c
-}
-
-// newShard creates a new S3-FIFO shard with the given capacity.
-func newShard[K comparable, V any](capacity int, smallRatio, ghostRatio float64, hasher func(K) uint64) *shard[K, V] {
-	// Small queue: recommended 10%
-	smallCap := max(int(float64(capacity)*smallRatio), 1)
-
-	// Ghost capacity: controls rotation frequency
-	ghostCap := max(int(float64(capacity)*ghostRatio), 1)
-
-	s := &shard[K, V]{
-		capacity:    capacity,
-		smallCap:    smallCap,
-		ghostCap:    ghostCap,
-		entries:     make(map[K]*entry[K, V], capacity),
-		ghostActive: newBloomFilter(ghostCap, 0.00001),
-		ghostAging:  newBloomFilter(ghostCap, 0.00001),
-		hasher:      hasher,
-	}
-	return s
 }
 
 func (s *shard[K, V]) newEntry() *entry[K, V] {
@@ -295,12 +284,8 @@ func (s *shard[K, V]) putEntry(e *entry[K, V]) {
 
 // shard returns the shard for a given key using type-optimized hashing.
 // Uses bitwise AND with shardMask for fast modulo (numShards must be power of 2).
-// Fast paths for int, int64, and string keys avoid the type switch overhead entirely.
-//
-//go:nosplit
 func (c *s3fifo[K, V]) shard(key K) *shard[K, V] {
-	// Fast path for int keys (most common case in benchmarks).
-	// The keyIsInt flag is set once at construction, so this branch is predictable.
+	// Fast paths for common key types avoid type switch overhead.
 	if c.keyIsInt {
 		//nolint:gosec // G115: intentional wrap for fast modulo
 		return c.shards[uint64(*(*int)(unsafe.Pointer(&key)))&c.shardMask]
@@ -312,26 +297,18 @@ func (c *s3fifo[K, V]) shard(key K) *shard[K, V] {
 	if c.keyIsString {
 		return c.shards[wyhashString(*(*string)(unsafe.Pointer(&key)))&c.shardMask]
 	}
-	return c.shards[c.shardIndexSlow(key)]
-}
-
-// shardIndexSlow computes the shard index using a type switch.
-// This is the fallback for key types other than int/int64/string.
-func (c *s3fifo[K, V]) shardIndexSlow(key K) uint64 {
+	// Fallback for other key types
 	switch k := any(key).(type) {
 	case uint:
-		return uint64(k) & c.shardMask
+		return c.shards[uint64(k)&c.shardMask]
 	case uint64:
-		return k & c.shardMask
+		return c.shards[k&c.shardMask]
 	case string:
-		return wyhashString(k) & c.shardMask
+		return c.shards[wyhashString(k)&c.shardMask]
 	case fmt.Stringer:
-		return wyhashString(k.String()) & c.shardMask
+		return c.shards[wyhashString(k.String())&c.shardMask]
 	default:
-		// Fallback: convert to string representation and hash.
-		// This is not fast, but is reliable for any comparable type.
-		// Avoid using structs as keys if performance matters.
-		return wyhashString(fmt.Sprintf("%v", key)) & c.shardMask
+		return c.shards[wyhashString(fmt.Sprintf("%v", key))&c.shardMask]
 	}
 }
 
