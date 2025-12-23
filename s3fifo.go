@@ -333,16 +333,21 @@ func (c *s3fifo[K, V]) shard(key K) *shard[K, V] {
 func (c *s3fifo[K, V]) get(key K) (V, bool) {
 	if c.keyIsString {
 		s := c.shards[wyhashString(*(*string)(unsafe.Pointer(&key)))&c.shardMask]
-		s.mu.RLock()
+		s.mu.Lock()
 		ent, ok := s.entries[key]
 		if !ok {
-			s.mu.RUnlock()
+			s.mu.Unlock()
 			var zero V
 			return zero, false
 		}
 		val := ent.value
 		expiry := ent.expiryNano
-		s.mu.RUnlock()
+		// LRU reordering: move accessed main queue items to back
+		if !ent.inSmall {
+			s.main.remove(ent)
+			s.main.pushBack(ent)
+		}
+		s.mu.Unlock()
 
 		if expiry != 0 && time.Now().UnixNano() > expiry {
 			var zero V
@@ -357,16 +362,21 @@ func (c *s3fifo[K, V]) get(key K) (V, bool) {
 	if c.keyIsInt {
 		//nolint:gosec // G115: intentional wrap for fast modulo
 		s := c.shards[uint64(*(*int)(unsafe.Pointer(&key)))&c.shardMask]
-		s.mu.RLock()
+		s.mu.Lock()
 		ent, ok := s.entries[key]
 		if !ok {
-			s.mu.RUnlock()
+			s.mu.Unlock()
 			var zero V
 			return zero, false
 		}
 		val := ent.value
 		expiry := ent.expiryNano
-		s.mu.RUnlock()
+		// LRU reordering: move accessed main queue items to back
+		if !ent.inSmall {
+			s.main.remove(ent)
+			s.main.pushBack(ent)
+		}
+		s.mu.Unlock()
 
 		if expiry != 0 && time.Now().UnixNano() > expiry {
 			var zero V
@@ -382,10 +392,10 @@ func (c *s3fifo[K, V]) get(key K) (V, bool) {
 }
 
 func (s *shard[K, V]) get(key K) (V, bool) {
-	s.mu.RLock()
+	s.mu.Lock()
 	ent, ok := s.entries[key]
 	if !ok {
-		s.mu.RUnlock()
+		s.mu.Unlock()
 		var zero V
 		return zero, false
 	}
@@ -393,7 +403,13 @@ func (s *shard[K, V]) get(key K) (V, bool) {
 	// Read values while holding lock to avoid race with concurrent set()
 	val := ent.value
 	expiry := ent.expiryNano
-	s.mu.RUnlock()
+
+	// LRU reordering: move accessed main queue items to back
+	if !ent.inSmall {
+		s.main.remove(ent)
+		s.main.pushBack(ent)
+	}
+	s.mu.Unlock()
 
 	// Check expiration (lazy - actual cleanup happens in background)
 	if expiry != 0 && time.Now().UnixNano() > expiry {
