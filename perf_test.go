@@ -1,13 +1,13 @@
 //go:build !race
 
-package sfcache
+package multicache
 
 import (
 	"testing"
 	"time"
 )
 
-func TestMemoryCache_ReadPerformance(t *testing.T) {
+func TestCache_ReadPerformance(t *testing.T) {
 	cache := New[int, int]()
 	defer cache.Close()
 

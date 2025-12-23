@@ -14,8 +14,8 @@ Local filesystem persistence using Go's gob encoding.
 
 ```go
 import (
-    "github.com/codeGROOVE-dev/sfcache"
-    "github.com/codeGROOVE-dev/sfcache/persist/localfs"
+    "github.com/codeGROOVE-dev/multicache"
+    "github.com/codeGROOVE-dev/multicache/persist/localfs"
 )
 
 // Uses OS cache directory (e.g., ~/.cache/myapp on Linux)
@@ -24,8 +24,8 @@ p, _ := localfs.New[string, User]("myapp", "")
 // Or specify custom directory
 p, _ := localfs.New[string, User]("myapp", "/tmp/my-cache")
 
-cache, _ := sfcache.New[string, User](ctx,
-    sfcache.WithPersistence(p))
+cache, _ := multicache.New[string, User](ctx,
+    multicache.WithPersistence(p))
 ```
 
 ## Storage Location

@@ -1,4 +1,4 @@
-package sfcache
+package multicache
 
 import (
 	"context"
@@ -29,9 +29,9 @@ type TieredCache[K comparable, V any] struct {
 // Example:
 //
 //	store, _ := localfs.New[string, User]("myapp", "")
-//	cache, err := sfcache.NewTiered[string, User](store,
-//	    sfcache.Size(10000),
-//	    sfcache.TTL(time.Hour),
+//	cache, err := multicache.NewTiered[string, User](store,
+//	    multicache.Size(10000),
+//	    multicache.TTL(time.Hour),
 //	)
 //	if err != nil {
 //	    return err

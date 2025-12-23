@@ -1,4 +1,4 @@
-// Package null provides a no-op store implementation for sfcache.
+// Package null provides a no-op store implementation for multicache.
 // All gets return not found, all sets are discarded.
 // Useful for testing or when the TieredCache API is desired without persistence.
 package null
@@ -7,11 +7,11 @@ import (
 	"context"
 	"time"
 
-	"github.com/codeGROOVE-dev/sfcache/pkg/store/compress"
+	"github.com/codeGROOVE-dev/multicache/pkg/store/compress"
 )
 
 // Store implements a no-op persistence store.
-// It satisfies the sfcache.Store interface without storing anything.
+// It satisfies the multicache.Store interface without storing anything.
 type Store[K comparable, V any] struct{}
 
 // New creates a new null store.

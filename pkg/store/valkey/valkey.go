@@ -1,4 +1,4 @@
-// Package valkey provides Valkey/Redis persistence for sfcache.
+// Package valkey provides Valkey/Redis persistence for multicache.
 package valkey
 
 import (
@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/codeGROOVE-dev/sfcache/pkg/store/compress"
+	"github.com/codeGROOVE-dev/multicache/pkg/store/compress"
 	"github.com/valkey-io/valkey-go"
 )
 

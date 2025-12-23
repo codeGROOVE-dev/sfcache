@@ -1,4 +1,4 @@
-// Package datastore provides Google Cloud Datastore persistence for sfcache.
+// Package datastore provides Google Cloud Datastore persistence for multicache.
 package datastore
 
 import (
@@ -10,7 +10,7 @@ import (
 	"time"
 
 	ds "github.com/codeGROOVE-dev/ds9/pkg/datastore"
-	"github.com/codeGROOVE-dev/sfcache/pkg/store/compress"
+	"github.com/codeGROOVE-dev/multicache/pkg/store/compress"
 )
 
 const (

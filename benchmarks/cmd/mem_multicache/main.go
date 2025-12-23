@@ -1,4 +1,4 @@
-// Package main benchmarks sfcache memory usage.
+// Package main benchmarks multicache memory usage.
 package main
 
 import (
@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/codeGROOVE-dev/sfcache"
+	"github.com/codeGROOVE-dev/multicache"
 )
 
 var keepAlive any //nolint:unused // prevents compiler from optimizing away allocations in benchmarks
@@ -20,10 +20,11 @@ func main() {
 	valSize := flag.Int("valSize", 1024, "value size")
 	flag.Parse()
 
-	runtime.GC() //nolint:revive // intentional GC for accurate memory measurement
+	//nolint:revive // explicit GC required for accurate memory benchmarking
+	runtime.GC()
 	debug.FreeOSMemory()
 
-	cache := sfcache.New[string, []byte](sfcache.Size(*capacity))
+	cache := multicache.New[string, []byte](multicache.Size(*capacity))
 
 	// Run 3 passes to ensure admission policies (like TinyLFU/Ristretto) accept the items
 	for range 3 {
@@ -36,13 +37,15 @@ func main() {
 
 	keepAlive = cache
 
-	runtime.GC() //nolint:revive // intentional GC for accurate memory measurement
+	//nolint:revive // explicit GC required for accurate memory benchmarking
+	runtime.GC()
 	time.Sleep(100 * time.Millisecond)
-	runtime.GC() //nolint:revive // intentional GC for accurate memory measurement
+	//nolint:revive // explicit GC required for accurate memory benchmarking
+	runtime.GC()
 	debug.FreeOSMemory()
 
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
 
-	fmt.Printf(`{"name":"sfcache", "items":%d, "bytes":%d}`, cache.Len(), mem.Alloc)
+	fmt.Printf(`{"name":"multicache", "items":%d, "bytes":%d}`, cache.Len(), mem.Alloc)
 }

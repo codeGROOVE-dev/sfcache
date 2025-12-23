@@ -1,3 +1,3 @@
-module github.com/codeGROOVE-dev/sfcache
+module github.com/codeGROOVE-dev/multicache
 
 go 1.25.4

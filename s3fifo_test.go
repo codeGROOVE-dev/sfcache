@@ -1,4 +1,4 @@
-package sfcache
+package multicache
 
 import (
 	"fmt"

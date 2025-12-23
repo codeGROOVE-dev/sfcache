@@ -1,11 +1,11 @@
-module github.com/codeGROOVE-dev/sfcache/pkg/store/cloudrun
+module github.com/codeGROOVE-dev/multicache/pkg/store/cloudrun
 
 go 1.25.4
 
 require (
-	github.com/codeGROOVE-dev/sfcache/pkg/store/compress v1.5.0
-	github.com/codeGROOVE-dev/sfcache/pkg/store/datastore v1.5.0
-	github.com/codeGROOVE-dev/sfcache/pkg/store/localfs v1.5.0
+	github.com/codeGROOVE-dev/multicache/pkg/store/compress v1.5.0
+	github.com/codeGROOVE-dev/multicache/pkg/store/datastore v1.5.0
+	github.com/codeGROOVE-dev/multicache/pkg/store/localfs v1.5.0
 )
 
 require (
@@ -13,8 +13,8 @@ require (
 	github.com/klauspost/compress v1.18.2 // indirect
 )
 
-replace github.com/codeGROOVE-dev/sfcache/pkg/store/datastore => ../datastore
+replace github.com/codeGROOVE-dev/multicache/pkg/store/datastore => ../datastore
 
-replace github.com/codeGROOVE-dev/sfcache/pkg/store/localfs => ../localfs
+replace github.com/codeGROOVE-dev/multicache/pkg/store/localfs => ../localfs
 
-replace github.com/codeGROOVE-dev/sfcache/pkg/store/compress => ../compress
+replace github.com/codeGROOVE-dev/multicache/pkg/store/compress => ../compress

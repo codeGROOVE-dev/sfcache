@@ -1,4 +1,4 @@
-package sfcache
+package multicache
 
 import (
 	"fmt"
@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestMemoryCache_Basic(t *testing.T) {
+func TestCache_Basic(t *testing.T) {
 	cache := New[string, int]()
 	defer cache.Close()
 
@@ -38,7 +38,7 @@ func TestMemoryCache_Basic(t *testing.T) {
 	}
 }
 
-func TestMemoryCache_WithTTL(t *testing.T) {
+func TestCache_WithTTL(t *testing.T) {
 	cache := New[string, string]()
 	defer cache.Close()
 
@@ -61,7 +61,7 @@ func TestMemoryCache_WithTTL(t *testing.T) {
 	}
 }
 
-func TestMemoryCache_DefaultTTL(t *testing.T) {
+func TestCache_DefaultTTL(t *testing.T) {
 	cache := New[string, int](TTL(50 * time.Millisecond))
 	defer cache.Close()
 
@@ -84,7 +84,7 @@ func TestMemoryCache_DefaultTTL(t *testing.T) {
 	}
 }
 
-func TestMemoryCache_Concurrent(t *testing.T) {
+func TestCache_Concurrent(t *testing.T) {
 	cache := New[int, int](Size(1000))
 	defer cache.Close()
 
@@ -118,7 +118,7 @@ func TestMemoryCache_Concurrent(t *testing.T) {
 	}
 }
 
-func TestMemoryCache_Len(t *testing.T) {
+func TestCache_Len(t *testing.T) {
 	cache := New[string, int]()
 	defer cache.Close()
 
@@ -141,7 +141,7 @@ func TestMemoryCache_Len(t *testing.T) {
 	}
 }
 
-func BenchmarkMemoryCache_Set(b *testing.B) {
+func BenchmarkCache_Set(b *testing.B) {
 	cache := New[int, int]()
 	defer cache.Close()
 
@@ -151,7 +151,7 @@ func BenchmarkMemoryCache_Set(b *testing.B) {
 	}
 }
 
-func BenchmarkMemoryCache_Get_Hit(b *testing.B) {
+func BenchmarkCache_Get_Hit(b *testing.B) {
 	cache := New[int, int]()
 	defer cache.Close()
 
@@ -166,7 +166,7 @@ func BenchmarkMemoryCache_Get_Hit(b *testing.B) {
 	}
 }
 
-func BenchmarkMemoryCache_Get_Miss(b *testing.B) {
+func BenchmarkCache_Get_Miss(b *testing.B) {
 	cache := New[int, int]()
 	defer cache.Close()
 
@@ -176,7 +176,7 @@ func BenchmarkMemoryCache_Get_Miss(b *testing.B) {
 	}
 }
 
-func BenchmarkMemoryCache_Mixed(b *testing.B) {
+func BenchmarkCache_Mixed(b *testing.B) {
 	cache := New[int, int]()
 	defer cache.Close()
 
@@ -190,7 +190,7 @@ func BenchmarkMemoryCache_Mixed(b *testing.B) {
 	}
 }
 
-func TestMemoryCache_WithOptions(t *testing.T) {
+func TestCache_WithOptions(t *testing.T) {
 	// Test Size
 	cache := New[string, int](Size(500))
 	if cache.memory == nil {
@@ -206,7 +206,7 @@ func TestMemoryCache_WithOptions(t *testing.T) {
 	cache.Close()
 }
 
-func TestMemoryCache_DeleteNonExistent(t *testing.T) {
+func TestCache_DeleteNonExistent(t *testing.T) {
 	cache := New[string, int]()
 	defer cache.Close()
 
@@ -221,7 +221,7 @@ func TestMemoryCache_DeleteNonExistent(t *testing.T) {
 	}
 }
 
-func TestMemoryCache_EvictFromMain(t *testing.T) {
+func TestCache_EvictFromMain(t *testing.T) {
 	// Cache with 20000 capacity (approx 10 per shard with 2048 shards)
 	cache := New[int, int](Size(20000))
 	defer cache.Close()
@@ -246,7 +246,7 @@ func TestMemoryCache_EvictFromMain(t *testing.T) {
 	}
 }
 
-func TestMemoryCache_GetExpired(t *testing.T) {
+func TestCache_GetExpired(t *testing.T) {
 	cache := New[string, int]()
 	defer cache.Close()
 
@@ -263,7 +263,7 @@ func TestMemoryCache_GetExpired(t *testing.T) {
 	}
 }
 
-func TestMemoryCache_SetUpdateExisting(t *testing.T) {
+func TestCache_SetUpdateExisting(t *testing.T) {
 	cache := New[string, int]()
 	defer cache.Close()
 
@@ -283,7 +283,7 @@ func TestMemoryCache_SetUpdateExisting(t *testing.T) {
 	}
 }
 
-func TestMemoryCache_Flush(t *testing.T) {
+func TestCache_Flush(t *testing.T) {
 	cache := New[string, int]()
 	defer cache.Close()
 
@@ -316,7 +316,7 @@ func TestMemoryCache_Flush(t *testing.T) {
 	}
 }
 
-func TestMemoryCache_FlushEmpty(t *testing.T) {
+func TestCache_FlushEmpty(t *testing.T) {
 	cache := New[string, int]()
 	defer cache.Close()
 
@@ -327,7 +327,7 @@ func TestMemoryCache_FlushEmpty(t *testing.T) {
 	}
 }
 
-func TestMemoryCache_GhostQueue(t *testing.T) {
+func TestCache_GhostQueue(t *testing.T) {
 	// Small capacity to force ghost queue usage
 	cache := New[string, int](Size(10))
 	defer cache.Close()
@@ -352,7 +352,7 @@ func TestMemoryCache_GhostQueue(t *testing.T) {
 	t.Logf("Cache length: %d", cache.Len())
 }
 
-func TestMemoryCache_MainQueueEviction(t *testing.T) {
+func TestCache_MainQueueEviction(t *testing.T) {
 	// Create cache with 20000 capacity (approx 10 per shard with 2048 shards)
 	cache := New[string, int](Size(20000))
 	defer cache.Close()
@@ -378,7 +378,7 @@ func TestMemoryCache_MainQueueEviction(t *testing.T) {
 	}
 }
 
-func TestMemoryCache_Set_VariadicTTL(t *testing.T) {
+func TestCache_Set_VariadicTTL(t *testing.T) {
 	cache := New[string, int](TTL(time.Hour))
 	defer cache.Close()
 
@@ -406,7 +406,7 @@ func TestMemoryCache_Set_VariadicTTL(t *testing.T) {
 	}
 }
 
-func TestMemoryCache_Set_NoDefaultTTL(t *testing.T) {
+func TestCache_Set_NoDefaultTTL(t *testing.T) {
 	cache := New[string, int]() // No default TTL
 	defer cache.Close()
 
@@ -423,7 +423,7 @@ func TestMemoryCache_Set_NoDefaultTTL(t *testing.T) {
 	}
 }
 
-func TestMemoryCache_GetSet_Basic(t *testing.T) {
+func TestCache_GetSet_Basic(t *testing.T) {
 	cache := New[string, int]()
 	defer cache.Close()
 
@@ -458,7 +458,7 @@ func TestMemoryCache_GetSet_Basic(t *testing.T) {
 	}
 }
 
-func TestMemoryCache_GetSet_LoaderError(t *testing.T) {
+func TestCache_GetSet_LoaderError(t *testing.T) {
 	cache := New[string, int]()
 	defer cache.Close()
 
@@ -478,7 +478,7 @@ func TestMemoryCache_GetSet_LoaderError(t *testing.T) {
 	}
 }
 
-func TestMemoryCache_GetSet_ThunderingHerd(t *testing.T) {
+func TestCache_GetSet_ThunderingHerd(t *testing.T) {
 	cache := New[string, int]()
 	defer cache.Close()
 
@@ -528,7 +528,7 @@ func TestMemoryCache_GetSet_ThunderingHerd(t *testing.T) {
 	}
 }
 
-func TestMemoryCache_GetSet_WithTTL(t *testing.T) {
+func TestCache_GetSet_WithTTL(t *testing.T) {
 	cache := New[string, int]()
 	defer cache.Close()
 
@@ -563,7 +563,7 @@ func TestMemoryCache_GetSet_WithTTL(t *testing.T) {
 	}
 }
 
-func TestMemoryCache_GetSet_IntKeys(t *testing.T) {
+func TestCache_GetSet_IntKeys(t *testing.T) {
 	cache := New[int, int](Size(1000))
 	defer cache.Close()
 
@@ -615,7 +615,7 @@ func TestMemoryCache_GetSet_IntKeys(t *testing.T) {
 	}
 }
 
-func TestMemoryCache_CapacityEfficiency(t *testing.T) {
+func TestCache_CapacityEfficiency(t *testing.T) {
 	// Test that cache stores exactly the requested capacity.
 	// Global capacity tracking ensures 100% efficiency regardless of
 	// hash distribution across shards.
@@ -639,7 +639,7 @@ func TestMemoryCache_CapacityEfficiency(t *testing.T) {
 	}
 }
 
-func TestMemoryCache_CapacityEfficiency_StringKeys(t *testing.T) {
+func TestCache_CapacityEfficiency_StringKeys(t *testing.T) {
 	// String keys have different hash distribution - verify 100% efficiency.
 	sizes := []int{1000, 16384}
 

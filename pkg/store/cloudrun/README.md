@@ -14,14 +14,14 @@ This package detects whether your application is running in Google Cloud Run and
 
 ```go
 import (
-    "github.com/codeGROOVE-dev/sfcache"
-    "github.com/codeGROOVE-dev/sfcache/persist/cloudrun"
+    "github.com/codeGROOVE-dev/multicache"
+    "github.com/codeGROOVE-dev/multicache/persist/cloudrun"
 )
 
 // Automatic backend selection with fallback
 p, _ := cloudrun.New[string, User](ctx, "myapp")
-cache, _ := sfcache.New[string, User](ctx,
-    sfcache.WithPersistence(p))
+cache, _ := multicache.New[string, User](ctx,
+    multicache.WithPersistence(p))
 ```
 
 The function always succeeds by falling back to local files if Datastore is unavailable due to:

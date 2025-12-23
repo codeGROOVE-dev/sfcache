@@ -1,5 +1,5 @@
-// Package sfcache provides a high-performance cache with S3-FIFO eviction and optional persistence.
-package sfcache
+// Package multicache provides a high-performance adaptive cache with optional persistence.
+package multicache
 
 import (
 	"sync"
@@ -8,9 +8,9 @@ import (
 
 const numFlightShards = 256
 
-// MemoryCache is a fast in-memory cache without persistence.
+// Cache is a fast in-memory cache without persistence.
 // All operations are context-free and never return errors.
-type MemoryCache[K comparable, V any] struct {
+type Cache[K comparable, V any] struct {
 	flights    [numFlightShards]flightGroup[K, V]
 	memory     *s3fifo[K, V]
 	defaultTTL time.Duration
@@ -85,22 +85,22 @@ func (g *flightGroup[K, V]) do(key K, fn func() (V, error)) (V, error) {
 //
 // Example:
 //
-//	cache := sfcache.New[string, User](
-//	    sfcache.Size(10000),
-//	    sfcache.TTL(time.Hour),
+//	cache := multicache.New[string, User](
+//	    multicache.Size(10000),
+//	    multicache.TTL(time.Hour),
 //	)
 //	defer cache.Close()
 //
 //	cache.Set("user:123", user)              // uses default TTL
 //	cache.Set("user:123", user, time.Hour)   // explicit TTL
 //	user, ok := cache.Get("user:123")
-func New[K comparable, V any](opts ...Option) *MemoryCache[K, V] {
+func New[K comparable, V any](opts ...Option) *Cache[K, V] {
 	cfg := defaultConfig()
 	for _, opt := range opts {
 		opt(cfg)
 	}
 
-	return &MemoryCache[K, V]{
+	return &Cache[K, V]{
 		memory:     newS3FIFO[K, V](cfg),
 		defaultTTL: cfg.defaultTTL,
 		noExpiry:   cfg.defaultTTL == 0,
@@ -109,14 +109,14 @@ func New[K comparable, V any](opts ...Option) *MemoryCache[K, V] {
 
 // Get retrieves a value from the cache.
 // Returns the value and true if found, or the zero value and false if not found.
-func (c *MemoryCache[K, V]) Get(key K) (V, bool) {
+func (c *Cache[K, V]) Get(key K) (V, bool) {
 	return c.memory.get(key)
 }
 
 // Set stores a value in the cache.
 // If no TTL is provided, the default TTL is used.
 // If no default TTL is configured, the entry never expires.
-func (c *MemoryCache[K, V]) Set(key K, value V, ttl ...time.Duration) {
+func (c *Cache[K, V]) Set(key K, value V, ttl ...time.Duration) {
 	// Fast path when no TTL is configured and none passed.
 	if c.noExpiry && len(ttl) == 0 {
 		c.memory.set(key, value, 0)
@@ -130,14 +130,14 @@ func (c *MemoryCache[K, V]) Set(key K, value V, ttl ...time.Duration) {
 }
 
 // Delete removes a value from the cache.
-func (c *MemoryCache[K, V]) Delete(key K) {
+func (c *Cache[K, V]) Delete(key K) {
 	c.memory.del(key)
 }
 
 // SetIfAbsent stores value only if key doesn't exist.
 // Returns the existing value and true if found, or the new value and false if stored.
 // Unlike GetSet, this has no thundering herd protection - use when value is precomputed.
-func (c *MemoryCache[K, V]) SetIfAbsent(key K, value V, ttl ...time.Duration) (V, bool) {
+func (c *Cache[K, V]) SetIfAbsent(key K, value V, ttl ...time.Duration) (V, bool) {
 	if val, ok := c.memory.get(key); ok {
 		return val, true
 	}
@@ -163,7 +163,7 @@ func (c *MemoryCache[K, V]) SetIfAbsent(key K, value V, ttl ...time.Duration) (V
 //	user, err := cache.GetSet("user:123", func() (User, error) {
 //	    return fetchUserFromDB("123")
 //	}, time.Hour)
-func (c *MemoryCache[K, V]) GetSet(key K, loader func() (V, error), ttl ...time.Duration) (V, error) {
+func (c *Cache[K, V]) GetSet(key K, loader func() (V, error), ttl ...time.Duration) (V, error) {
 	// Fast path: check cache first
 	if val, ok := c.memory.get(key); ok {
 		return val, nil
@@ -212,24 +212,24 @@ func flightShard[K comparable](key K) int {
 }
 
 // Len returns the number of entries in the cache.
-func (c *MemoryCache[K, V]) Len() int {
+func (c *Cache[K, V]) Len() int {
 	return c.memory.len()
 }
 
 // Flush removes all entries from the cache.
 // Returns the number of entries removed.
-func (c *MemoryCache[K, V]) Flush() int {
+func (c *Cache[K, V]) Flush() int {
 	return c.memory.flush()
 }
 
 // Close releases resources held by the cache.
-// For MemoryCache this is a no-op, but provided for API consistency.
-func (*MemoryCache[K, V]) Close() {
+// For Cache this is a no-op, but provided for API consistency.
+func (*Cache[K, V]) Close() {
 	// No-op for memory-only cache
 }
 
 // expiry returns the expiry time based on TTL and default TTL.
-func (c *MemoryCache[K, V]) expiry(ttl time.Duration) time.Time {
+func (c *Cache[K, V]) expiry(ttl time.Duration) time.Time {
 	if ttl <= 0 {
 		ttl = c.defaultTTL
 	}
@@ -239,7 +239,7 @@ func (c *MemoryCache[K, V]) expiry(ttl time.Duration) time.Time {
 	return time.Now().Add(ttl)
 }
 
-// config holds configuration for MemoryCache.
+// config holds configuration for Cache.
 type config struct {
 	size       int
 	defaultTTL time.Duration
@@ -251,7 +251,7 @@ func defaultConfig() *config {
 	}
 }
 
-// Option configures a MemoryCache.
+// Option configures a Cache.
 type Option func(*config)
 
 // Size sets the maximum number of entries in the memory cache.

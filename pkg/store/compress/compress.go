@@ -1,4 +1,4 @@
-// Package compress provides compression algorithms for sfcache persistence stores.
+// Package compress provides compression algorithms for multicache persistence stores.
 package compress
 
 import (

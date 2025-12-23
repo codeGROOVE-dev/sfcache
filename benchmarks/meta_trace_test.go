@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/codeGROOVE-dev/sfcache"
+	"github.com/codeGROOVE-dev/multicache"
 	"github.com/coocood/freecache"
 	"github.com/dgraph-io/ristretto"
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -103,7 +103,7 @@ func runMetaTraceHitRate() {
 		name string
 		fn   func([]traceOp, int) float64
 	}{
-		{"sfcache", runMetaTraceSFCache},
+		{"multicache", runMetaTraceMulticache},
 		{"otter", runMetaTraceOtter},
 		{"ristretto", runMetaTraceRistretto},
 		{"tinylfu", runMetaTraceTinyLFU},
@@ -126,16 +126,16 @@ func runMetaTraceHitRate() {
 }
 
 func printMetaTraceSummary(results []metaTraceResult) {
-	// Find sfcache and best performer at 100K
-	var sfcacheRate, bestRate float64
+	// Find multicache and best performer at 100K
+	var multicacheRate, bestRate float64
 	var bestName string
-	sfcacheIdx := -1
+	multicacheIdx := -1
 
 	for i, r := range results {
 		rate := r.rates[1] // 100K cache size
-		if r.name == "sfcache" {
-			sfcacheRate = rate
-			sfcacheIdx = i
+		if r.name == "multicache" {
+			multicacheRate = rate
+			multicacheIdx = i
 		}
 		if rate > bestRate {
 			bestRate = rate
@@ -143,25 +143,25 @@ func printMetaTraceSummary(results []metaTraceResult) {
 		}
 	}
 
-	if sfcacheIdx < 0 {
+	if multicacheIdx < 0 {
 		return
 	}
 
-	if sfcacheRate >= bestRate {
+	if multicacheRate >= bestRate {
 		// Find second best
 		var secondBest float64
 		var secondName string
 		for _, r := range results {
 			rate := r.rates[1]
-			if r.name != "sfcache" && rate > secondBest {
+			if r.name != "multicache" && rate > secondBest {
 				secondBest = rate
 				secondName = r.name
 			}
 		}
-		pct := (sfcacheRate - secondBest) / secondBest * 100
+		pct := (multicacheRate - secondBest) / secondBest * 100
 		fmt.Printf("- 🔥 Meta trace: %s better than next best (%s)\n\n", formatPercent(pct), secondName)
 	} else {
-		pct := (bestRate - sfcacheRate) / sfcacheRate * 100
+		pct := (bestRate - multicacheRate) / multicacheRate * 100
 		fmt.Printf("- 💧 Meta trace: %s worse than best (%s)\n\n", formatPercent(pct), bestName)
 	}
 }
@@ -196,7 +196,7 @@ func TestMetaTrace(t *testing.T) {
 			name    string
 			hitRate float64
 		}{
-			{"sfcache", runMetaTraceSFCache(ops, cacheSize)},
+			{"multicache", runMetaTraceMulticache(ops, cacheSize)},
 			{"otter", runMetaTraceOtter(ops, cacheSize)},
 			{"ristretto", runMetaTraceRistretto(ops, cacheSize)},
 			{"tinylfu", runMetaTraceTinyLFU(ops, cacheSize)},
@@ -210,8 +210,8 @@ func TestMetaTrace(t *testing.T) {
 	}
 }
 
-func runMetaTraceSFCache(ops []traceOp, cacheSize int) float64 {
-	cache := sfcache.New[string, string](sfcache.Size(cacheSize))
+func runMetaTraceMulticache(ops []traceOp, cacheSize int) float64 {
+	cache := multicache.New[string, string](multicache.Size(cacheSize))
 	defer cache.Close()
 
 	var hits, misses int64

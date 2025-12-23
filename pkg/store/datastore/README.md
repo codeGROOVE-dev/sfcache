@@ -13,8 +13,8 @@ Google Cloud Datastore persistence with native TTL support.
 
 ```go
 import (
-    "github.com/codeGROOVE-dev/sfcache"
-    "github.com/codeGROOVE-dev/sfcache/persist/datastore"
+    "github.com/codeGROOVE-dev/multicache"
+    "github.com/codeGROOVE-dev/multicache/persist/datastore"
 )
 
 // cacheID becomes the Datastore database name
@@ -23,8 +23,8 @@ p, _ := datastore.New[string, User](ctx, "myapp")
 // Optional: clean up stale entries on startup
 p.Cleanup(ctx, 24*time.Hour)
 
-cache, _ := sfcache.New[string, User](ctx,
-    sfcache.WithPersistence(p))
+cache, _ := multicache.New[string, User](ctx,
+    multicache.WithPersistence(p))
 ```
 
 ## TTL Setup (Recommended)

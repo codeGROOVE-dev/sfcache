@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codeGROOVE-dev/sfcache/pkg/store/compress"
+	"github.com/codeGROOVE-dev/multicache/pkg/store/compress"
 )
 
 func TestFilePersist_StoreLoad(t *testing.T) {

@@ -9,13 +9,13 @@ tag:
 	fi
 	@echo "=== Releasing $(VERSION) ==="
 	@echo ""
-	@echo "Step 1: Update submodule go.mod files to require sfcache $(VERSION)..."
-	@find . -path ./go.mod -prune -o -name go.mod -print | xargs -I{} sed -i '' 's|github.com/codeGROOVE-dev/sfcache v[^ ]*|github.com/codeGROOVE-dev/sfcache $(VERSION)|' {}
+	@echo "Step 1: Update submodule go.mod files to require multicache $(VERSION)..."
+	@find . -path ./go.mod -prune -o -name go.mod -print | xargs -I{} sed -i '' 's|github.com/codeGROOVE-dev/multicache v[^ ]*|github.com/codeGROOVE-dev/multicache $(VERSION)|' {}
 	@# Update store submodule dependencies (compress must be first as others depend on it)
-	@find . -path ./go.mod -prune -o -name go.mod -print | xargs -I{} sed -i '' 's|github.com/codeGROOVE-dev/sfcache/pkg/store/compress v[^ ]*|github.com/codeGROOVE-dev/sfcache/pkg/store/compress $(VERSION)|' {}
-	@find . -path ./go.mod -prune -o -name go.mod -print | xargs -I{} sed -i '' 's|github.com/codeGROOVE-dev/sfcache/pkg/store/localfs v[^ ]*|github.com/codeGROOVE-dev/sfcache/pkg/store/localfs $(VERSION)|' {}
-	@find . -path ./go.mod -prune -o -name go.mod -print | xargs -I{} sed -i '' 's|github.com/codeGROOVE-dev/sfcache/pkg/store/datastore v[^ ]*|github.com/codeGROOVE-dev/sfcache/pkg/store/datastore $(VERSION)|' {}
-	@find . -path ./go.mod -prune -o -name go.mod -print | xargs -I{} sed -i '' 's|github.com/codeGROOVE-dev/sfcache/pkg/store/valkey v[^ ]*|github.com/codeGROOVE-dev/sfcache/pkg/store/valkey $(VERSION)|' {}
+	@find . -path ./go.mod -prune -o -name go.mod -print | xargs -I{} sed -i '' 's|github.com/codeGROOVE-dev/multicache/pkg/store/compress v[^ ]*|github.com/codeGROOVE-dev/multicache/pkg/store/compress $(VERSION)|' {}
+	@find . -path ./go.mod -prune -o -name go.mod -print | xargs -I{} sed -i '' 's|github.com/codeGROOVE-dev/multicache/pkg/store/localfs v[^ ]*|github.com/codeGROOVE-dev/multicache/pkg/store/localfs $(VERSION)|' {}
+	@find . -path ./go.mod -prune -o -name go.mod -print | xargs -I{} sed -i '' 's|github.com/codeGROOVE-dev/multicache/pkg/store/datastore v[^ ]*|github.com/codeGROOVE-dev/multicache/pkg/store/datastore $(VERSION)|' {}
+	@find . -path ./go.mod -prune -o -name go.mod -print | xargs -I{} sed -i '' 's|github.com/codeGROOVE-dev/multicache/pkg/store/valkey v[^ ]*|github.com/codeGROOVE-dev/multicache/pkg/store/valkey $(VERSION)|' {}
 	@echo ""
 	@echo "Step 2: Commit go.mod changes..."
 	@git add -A
@@ -71,7 +71,7 @@ bench:
 # 4. Meta Trace Hit Rate (real-world)
 # 5. Zipf Hit Rate (synthetic)
 benchmark:
-	@echo "=== sfcache Benchmark Suite ==="
+	@echo "=== multicache Benchmark Suite ==="
 	@cd benchmarks && go test -run=TestBenchmarkSuite -v -timeout=300s
 
 clean:

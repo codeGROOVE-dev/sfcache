@@ -1,4 +1,4 @@
-package sfcache
+package multicache
 
 import (
 	"fmt"
@@ -11,8 +11,8 @@ import (
 	"unsafe"
 )
 
-// debugAdaptive enables adaptive mode debug output when SFCACHE_DEBUG=1.
-var debugAdaptive = os.Getenv("SFCACHE_DEBUG") == "1"
+// debugAdaptive enables adaptive mode debug output when MULTICACHE_DEBUG=1.
+var debugAdaptive = os.Getenv("MULTICACHE_DEBUG") == "1"
 
 // wyhash constants for fast string hashing.
 const (
@@ -562,7 +562,7 @@ func (s *shard[K, V]) set(key K, value V, expiryNano int64) {
 				}
 			}
 			if debugAdaptive && s.adaptiveMode != prev {
-				fmt.Printf("[sfcache] mode %d→%d (ghost=%d%%, cap=%d)\n",
+				fmt.Printf("[multicache] mode %d→%d (ghost=%d%%, cap=%d)\n",
 					prev, s.adaptiveMode, rate, s.capacity)
 			}
 			// Reset counters for next period
