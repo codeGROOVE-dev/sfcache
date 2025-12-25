@@ -278,24 +278,21 @@ func newS3FIFO[K comparable, V any](cfg *config) *s3fifo[K, V] {
 	return cache
 }
 
-func (s *shard[K, V]) newEntry() *entry[K, V] {
+func (s *shard[K, V]) allocEntry() *entry[K, V] {
 	if s.freeEntries != nil {
 		e := s.freeEntries
 		s.freeEntries = e.next
-		e.next = nil
-		e.prev = nil
+		e.next, e.prev = nil, nil
 		return e
 	}
 	return &entry[K, V]{}
 }
 
-func (s *shard[K, V]) putEntry(e *entry[K, V]) {
-	var (
-		zeroK K
-		zeroV V
-	)
-	e.key = zeroK
-	e.value = zeroV
+func (s *shard[K, V]) freeEntry(e *entry[K, V]) {
+	var zk K
+	var zv V
+	e.key = zk
+	e.value = zv
 	e.expiryNano = 0
 	e.freq.Store(0)
 	e.peakFreq.Store(0)
@@ -440,18 +437,13 @@ func (c *s3fifo[K, V]) set(key K, value V, expiryNano int64) {
 	}
 	if c.keyIsInt {
 		//nolint:gosec // G115: intentional wrap for fast modulo
-		c.shards[uint64(*(*int)(unsafe.Pointer(&key)))&c.shardMask].set(key, value, expiryNano)
+		c.shards[uint64(*(*int)(unsafe.Pointer(&key)))&c.shardMask].setWithHash(key, value, expiryNano, 0)
 		return
 	}
-	c.shard(key).set(key, value, expiryNano)
+	c.shard(key).setWithHash(key, value, expiryNano, 0)
 }
 
-func (s *shard[K, V]) set(key K, value V, expiryNano int64) {
-	s.setWithHash(key, value, expiryNano, 0)
-}
-
-// setWithHash is like set but accepts a pre-computed hash for ghost checks.
-// If hash is 0, it will be computed when needed.
+// setWithHash adds or updates a value. Hash is pre-computed for string keys (0 = compute when needed).
 func (s *shard[K, V]) setWithHash(key K, value V, expiryNano int64, hash uint64) {
 	s.mu.Lock()
 
@@ -473,7 +465,7 @@ func (s *shard[K, V]) setWithHash(key K, value V, expiryNano int64, hash uint64)
 	// Slow path: insert new key (already holding lock)
 
 	// Create new entry
-	ent := s.newEntry()
+	ent := s.allocEntry()
 	ent.key = key
 	ent.value = value
 	ent.expiryNano = expiryNano
@@ -504,19 +496,17 @@ func (s *shard[K, V]) setWithHash(key K, value V, expiryNano int64, hash uint64)
 		inGhost := s.ghostActive.Contains(h) || s.ghostAging.Contains(h)
 		ent.inSmall = !inGhost
 
-		// If returning from ghost, restore peak frequency with 50% penalty
+		// Restore 50% of peak frequency for ghost returns
 		if inGhost {
-			var peakFreq uint32
+			var peak uint32
 			if f, ok := s.ghostFreqActive[h]; ok {
-				peakFreq = f
+				peak = f
 			} else if f, ok := s.ghostFreqAging[h]; ok {
-				peakFreq = f
+				peak = f
 			}
-			// Restore 50% of peak frequency (rounded down)
-			restoredFreq := peakFreq / 2
-			if restoredFreq > 0 {
-				ent.freq.Store(restoredFreq)
-				ent.peakFreq.Store(restoredFreq) // Also restore peak
+			if restored := peak / 2; restored > 0 {
+				ent.freq.Store(restored)
+				ent.peakFreq.Store(restored)
 			}
 		}
 
@@ -564,95 +554,76 @@ func (s *shard[K, V]) delete(key K) {
 	}
 
 	delete(s.entries, key)
-	s.putEntry(ent)
+	s.freeEntry(ent)
 	s.parent.totalEntries.Add(-1)
 }
 
-// evictFromSmall evicts an entry from the small queue.
-// Checks the front entry and evicts if cold (freq < 2), otherwise promotes to main.
+// addToGhost records an evicted key in the ghost queue for future admission decisions.
+// Rotates ghost filters when capacity is reached.
+func (s *shard[K, V]) addToGhost(key K, peakFreq uint32) {
+	h := s.hasher(key)
+	if !s.ghostActive.Contains(h) {
+		s.ghostActive.Add(h)
+		// Only track frequency for items that will restore to >=1 (saves map writes)
+		if peakFreq >= 2 {
+			s.ghostFreqActive[h] = peakFreq
+		}
+	}
+	if s.ghostActive.entries >= s.ghostCap {
+		s.ghostAging.Reset()
+		s.ghostFreqAging = make(map[uint64]uint32, s.ghostCap)
+		s.ghostActive, s.ghostAging = s.ghostAging, s.ghostActive
+		s.ghostFreqActive, s.ghostFreqAging = s.ghostFreqAging, s.ghostFreqActive
+	}
+}
+
+// evictFromSmall evicts from small queue. Cold (freq<2) are evicted; warm are promoted.
 func (s *shard[K, V]) evictFromSmall() {
-	mainCap := (s.capacity * 9) / 10 // 90% for main queue
+	mcap := (s.capacity * 9) / 10
 
 	for s.small.len > 0 {
 		e := s.small.head
-		freq := e.freq.Load()
+		f := e.freq.Load()
 
-		// Cold entry (freq < 2): evict and add to ghost
-		if freq < 2 {
+		if f < 2 {
 			s.small.remove(e)
-			k := e.key
-			peakFreq := e.peakFreq.Load()
-			delete(s.entries, k)
-
-			h := s.hasher(k)
-			if !s.ghostActive.Contains(h) {
-				s.ghostActive.Add(h)
-				// Only track frequency for items that will restore to >=1 (saves map writes)
-				if peakFreq >= 2 {
-					s.ghostFreqActive[h] = peakFreq
-				}
-			}
-			if s.ghostActive.entries >= s.ghostCap {
-				s.ghostAging.Reset()
-				s.ghostFreqAging = make(map[uint64]uint32, s.ghostCap)
-				s.ghostActive, s.ghostAging = s.ghostAging, s.ghostActive
-				s.ghostFreqActive, s.ghostFreqAging = s.ghostFreqAging, s.ghostFreqActive
-			}
-
-			s.putEntry(e)
+			delete(s.entries, e.key)
+			s.addToGhost(e.key, e.peakFreq.Load())
+			s.freeEntry(e)
 			s.parent.totalEntries.Add(-1)
 			return
 		}
 
-		// Warm entry: promote to main queue
+		// Warm: promote to main
 		s.small.remove(e)
 		e.freq.Store(0)
 		e.inSmall = false
 		s.main.pushBack(e)
 
-		if s.main.len > mainCap {
+		if s.main.len > mcap {
 			s.evictFromMain()
 		}
 	}
 }
 
-// evictFromMain evicts an entry from the main queue.
-// Checks the front entry and evicts if cold (freq == 0), otherwise gives second chance.
+// evictFromMain evicts from main queue. Cold (freq==0) are evicted; warm get second chance.
 func (s *shard[K, V]) evictFromMain() {
 	for s.main.len > 0 {
 		e := s.main.head
-		freq := e.freq.Load()
+		f := e.freq.Load()
 
-		// Cold entry (freq == 0): evict and add to ghost
-		if freq == 0 {
+		if f == 0 {
 			s.main.remove(e)
-			k := e.key
-			peakFreq := e.peakFreq.Load()
-			delete(s.entries, k)
-
-			h := s.hasher(k)
-			if !s.ghostActive.Contains(h) {
-				s.ghostActive.Add(h)
-				// Only track frequency for items that will restore to >=1 (saves map writes)
-				if peakFreq >= 2 {
-					s.ghostFreqActive[h] = peakFreq
-				}
-			}
-			if s.ghostActive.entries >= s.ghostCap {
-				s.ghostAging.Reset()
-				s.ghostFreqAging = make(map[uint64]uint32, s.ghostCap)
-				s.ghostActive, s.ghostAging = s.ghostAging, s.ghostActive
-				s.ghostFreqActive, s.ghostFreqAging = s.ghostFreqAging, s.ghostFreqActive
-			}
-
-			s.putEntry(e)
+			delete(s.entries, e.key)
+			s.addToGhost(e.key, e.peakFreq.Load())
+			s.freeEntry(e)
 			s.parent.totalEntries.Add(-1)
 			return
 		}
 
-		// Warm entry: give second chance (decrement freq and move to back)
+		// Second chance: decrement and move to back
 		s.main.remove(e)
-		e.freq.Store(freq - 1)
+		e.freq.Store(f - 1)
 		s.main.pushBack(e)
 	}
 }
@@ -662,9 +633,9 @@ func (c *s3fifo[K, V]) len() int {
 	total := 0
 	for i := range c.shards {
 		s := c.shards[i]
-		s.mu.Lock()
+		s.mu.RLock()
 		total += len(s.entries)
-		s.mu.Unlock()
+		s.mu.RUnlock()
 	}
 	return total
 }
