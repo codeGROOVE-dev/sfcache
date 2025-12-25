@@ -208,15 +208,13 @@ The core algorithm follows the paper closely: items enter the small queue, get p
 
 ### Divergences from the S3-FIFO Paper
 
-We've made several enhancements that improve hit rates on real-world traces:
+1. **Ghost frequency restoration** - Store peak frequency at eviction; restore 50% on ghost hit. Returning items skip the cold-start problem, reducing re-eviction of proven-popular keys. Only tracked for peakFreq ≥ 2 (lower values yield 0 after integer division).
 
-1. **Eviction Sampling** - Instead of strict FIFO order, we sample 5 entries from the queue front and evict the coldest. Inspired by Redis's approximated LRU, this protects recently-accessed items without read-path overhead.
+2. **Main queue ghost tracking** - Ghost includes main queue evictions, not just small queue. Main queue items have demonstrated value (freq ≥ 2 to be promoted); preserving their history improves readmission decisions.
 
-2. **Ghost Frequency Memory** - We track the peak frequency each item achieved during its lifetime. When evicted, this peak is stored in the ghost queue. Items returning from ghost have 50% of their peak frequency restored, giving proven-popular items a head start.
+3. **Extended frequency counter** - maxFreq=7 (3 bits) vs paper's maxFreq=3 (2 bits). Finer granularity improves discrimination between warm and hot items during eviction.
 
-3. **Main Queue Ghost Tracking** - The paper only adds small queue evictions to ghost. We also add main queue evictions, preserving frequency history for items that proved themselves valuable enough to reach main.
-
-These changes yield +0.2-0.5% hit rate improvements on production traces (Meta KVCache, Twitter, Wikipedia) while maintaining the algorithm's simplicity and O(1) operations.
+These changes yield +0.2-0.5% hit rate on production traces while preserving O(1) operations.
 
 ## License
 

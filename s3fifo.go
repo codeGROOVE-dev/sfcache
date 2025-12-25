@@ -587,7 +587,10 @@ func (s *shard[K, V]) evictFromSmall() {
 			h := s.hasher(k)
 			if !s.ghostActive.Contains(h) {
 				s.ghostActive.Add(h)
-				s.ghostFreqActive[h] = peakFreq
+				// Only track frequency for items that will restore to >=1 (saves map writes)
+				if peakFreq >= 2 {
+					s.ghostFreqActive[h] = peakFreq
+				}
 			}
 			if s.ghostActive.entries >= s.ghostCap {
 				s.ghostAging.Reset()
@@ -630,7 +633,10 @@ func (s *shard[K, V]) evictFromMain() {
 			h := s.hasher(k)
 			if !s.ghostActive.Contains(h) {
 				s.ghostActive.Add(h)
-				s.ghostFreqActive[h] = peakFreq
+				// Only track frequency for items that will restore to >=1 (saves map writes)
+				if peakFreq >= 2 {
+					s.ghostFreqActive[h] = peakFreq
+				}
 			}
 			if s.ghostActive.entries >= s.ghostCap {
 				s.ghostAging.Reset()
