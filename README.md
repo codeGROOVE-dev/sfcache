@@ -86,8 +86,12 @@ S3-FIFO uses three queues: small (new entries), main (promoted entries), and gho
 This implementation adds:
 
 - **Dynamic sharding** - scales to 16×GOMAXPROCS shards to reduce lock contention
-- **Ghost frequency restoration** - returning keys restore 50% of their previous access count
+- **Tuned small queue** - 24.7% vs paper's 10%, chosen via sweep from 10-35% in 0.1% increments to maximize wins across 9 production traces (meta, cdn, twitter, wikipedia, thesios-file, etc.)
+- **Ghost frequency restoration** - returning keys restore 50% of their previous access count; helps zipf +0.26%, meta +0.1%
 - **Extended frequency cap** - max freq=7 vs paper's 3 for finer eviction decisions
+- **Hot item demotion** - items that were once hot (freq≥4) get demoted to small queue instead of evicted; improves zipf +0.24%
+
+The ghost queue bloom filters and frequency maps add ~80 bytes/item overhead compared to CLOCK (119 vs 38 bytes/item)
 
 Details: [s3fifo.com](https://s3fifo.com/)
 

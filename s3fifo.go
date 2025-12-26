@@ -92,6 +92,7 @@ type shard[K comparable, V any] struct {
 	hasher          func(K) uint64
 
 	capacity       int
+	smallThresh    int          // adaptive small queue threshold
 	freeEntries    *entry[K, V] // reuse pool
 	warmupComplete bool         // skip eviction until first fill
 	parent         *s3fifo[K, V]
@@ -162,7 +163,7 @@ func newS3FIFO[K comparable, V any](cfg *config) *s3fifo[K, V] {
 	// Formula: max(GOMAXPROCS*16, capacity/256) balances shard count vs S3-FIFO queue size.
 	// At 16 cores / 64K cache: 256 shards, 256 entries/shard → 189M ops/sec (vs 128M with 64 shards).
 	targetShards := max(runtime.GOMAXPROCS(0)*16, capacity/256)
-	const minEntriesPerShard = 256 // fewer entries per shard hurts S3-FIFO eviction accuracy
+	const minEntriesPerShard = 1024 // fewer entries per shard hurts S3-FIFO eviction accuracy
 	maxByCapacity := max(1, capacity/minEntriesPerShard)
 	nshards := min(targetShards, maxByCapacity, maxShards)
 	//nolint:gosec // G115: nshards bounded by [1, maxShards]
@@ -228,6 +229,7 @@ func newS3FIFO[K comparable, V any](cfg *config) *s3fifo[K, V] {
 		ghostCap := max(int(float64(shardCap)*ghostRatio), 1)
 		cache.shards[i] = &shard[K, V]{
 			capacity:        shardCap,
+			smallThresh:     shardCap * 247 / 1000, // 24.7% - tuned via sweep from 10-35% to maximize wins across production traces
 			ghostCap:        ghostCap,
 			entries:         make(map[K]*entry[K, V], shardCap),
 			ghostActive:     newBloomFilter(ghostCap, 0.00001),
@@ -436,21 +438,21 @@ func (s *shard[K, V]) setWithHash(key K, value V, expiryNano int64, hash uint64)
 		inGhost := s.ghostActive.Contains(h) || s.ghostAging.Contains(h)
 		ent.inSmall = !inGhost
 
-		// Ghost hits restore half their previous frequency.
-		if inGhost {
-			var peak uint32
-			if f, ok := s.ghostFreqActive[h]; ok {
-				peak = f
-			} else if f, ok := s.ghostFreqAging[h]; ok {
-				peak = f
-			}
-			if restored := peak / 2; restored > 0 {
+		// Restore 50% of peak frequency for items returning from ghost.
+		// Helps zipf +0.26%, meta +0.10% by recognizing previously-popular keys.
+		if !ent.inSmall {
+			if peak, ok := s.ghostFreqActive[h]; ok {
+				restored := peak / 2
+				ent.freq.Store(restored)
+				ent.peakFreq.Store(restored)
+			} else if peak, ok := s.ghostFreqAging[h]; ok {
+				restored := peak / 2
 				ent.freq.Store(restored)
 				ent.peakFreq.Store(restored)
 			}
 		}
 
-		if s.main.len > 0 && s.small.len <= s.capacity/10 {
+		if s.main.len > 0 && s.small.len <= s.smallThresh {
 			s.evictFromMain()
 		} else if s.small.len > 0 {
 			s.evictFromSmall()
@@ -541,6 +543,12 @@ func (s *shard[K, V]) evictFromSmall() {
 }
 
 // evictFromMain evicts cold entries (freq==0) or gives warm ones a second chance.
+//
+// Deviation from paper: items that were once hot (peakFreq >= 4) get demoted to
+// small queue with freq=1 instead of being evicted. This gives them another chance
+// to prove themselves before final eviction. Improves Zipf workloads by +0.24%
+// (concentrated at small cache sizes: +0.72% at 16K) with no regressions on other
+// traces. See experiment_results.md Phase 10, Exp C for details.
 func (s *shard[K, V]) evictFromMain() {
 	for s.main.len > 0 {
 		e := s.main.head
@@ -548,6 +556,13 @@ func (s *shard[K, V]) evictFromMain() {
 
 		if f == 0 {
 			s.main.remove(e)
+			// Demote once-hot items to small queue for another chance.
+			if e.peakFreq.Load() >= 4 {
+				e.freq.Store(1)
+				e.inSmall = true
+				s.small.pushBack(e)
+				return
+			}
 			delete(s.entries, e.key)
 			s.addToGhost(e.key, e.peakFreq.Load())
 			s.freeEntry(e)
