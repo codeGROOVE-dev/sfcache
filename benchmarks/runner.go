@@ -19,7 +19,7 @@ import (
 	"strings"
 )
 
-// Hitrate goals (averages across all cache sizes).
+// hitrateGoals are the minimum acceptable averages across all cache sizes.
 // Keys must match gocachemark JSON output (camelCase).
 var hitrateGoals = map[string]float64{
 	"cdn":          58.3,
@@ -32,7 +32,20 @@ var hitrateGoals = map[string]float64{
 	"tencentPhoto": 19.7,
 }
 
-// Gold medalists for competitive benchmarking.
+// hitRateKeys maps display names to JSON keys for hit rate lookup.
+var hitRateKeys = map[string]string{
+	"CDN":           "cdn",
+	"Meta":          "meta",
+	"Zipf":          "zipf",
+	"Twitter":       "twitter",
+	"Wikipedia":     "wikipedia",
+	"Thesios Block": "thesiosBlock",
+	"Thesios File":  "thesiosFile",
+	"IBM Docker":    "ibmDocker",
+	"Tencent Photo": "tencentPhoto",
+}
+
+// goldMedalists are the caches to compare in competitive mode.
 var goldMedalists = "multicache,otter,clock,theine,sieve,freelru-sync"
 
 const (
@@ -58,7 +71,10 @@ func main() {
 	}
 
 	// Update go.mod replace directive.
-	if err := updateReplace(gocachemarkDir, multicacheDir); err != nil {
+	cmd := exec.Command("go", "mod", "edit", "-replace", multicacheModule+"="+multicacheDir)
+	cmd.Dir = gocachemarkDir
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
 		fatal("updating go.mod replace: %v", err)
 	}
 
@@ -88,8 +104,12 @@ func main() {
 	args = append(args, "-outdir", outdir)
 
 	// Run gocachemark with streaming output.
-	fmt.Printf("Running %s benchmarks via gocachemark...\n\n", modeName(*competitive))
-	results, err := runGocachemark(gocachemarkDir, args)
+	mode := "multicache"
+	if *competitive {
+		mode = "competitive"
+	}
+	fmt.Printf("Running %s benchmarks via gocachemark...\n\n", mode)
+	results, err := runGocachemark(gocachemarkDir, args, outdir)
 	if err != nil {
 		fatal("running gocachemark: %v", err)
 	}
@@ -106,13 +126,6 @@ func main() {
 			fatal("%v", err)
 		}
 	}
-}
-
-func modeName(competitive bool) string {
-	if competitive {
-		return "competitive"
-	}
-	return "multicache"
 }
 
 func findMulticacheDir() (string, error) {
@@ -188,15 +201,7 @@ func isGocachemarkDir(dir string) bool {
 	return strings.Contains(string(data), gocachemarkRepo)
 }
 
-func updateReplace(gocachemarkDir, multicacheDir string) error {
-	cmd := exec.Command("go", "mod", "edit",
-		"-replace", multicacheModule+"="+multicacheDir)
-	cmd.Dir = gocachemarkDir
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-func runGocachemark(dir string, args []string) (*Results, error) {
+func runGocachemark(dir string, args []string, outdir string) (*Results, error) {
 	cmd := exec.Command("go", args...)
 	cmd.Dir = dir
 	cmd.Stderr = os.Stderr
@@ -211,40 +216,18 @@ func runGocachemark(dir string, args []string) (*Results, error) {
 	}
 
 	// Stream output to stdout.
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		fmt.Println(scanner.Text())
+	s := bufio.NewScanner(stdout)
+	for s.Scan() {
+		fmt.Println(s.Text())
 	}
-
+	if err := s.Err(); err != nil {
+		return nil, fmt.Errorf("reading output: %w", err)
+	}
 	if err := cmd.Wait(); err != nil {
 		return nil, err
 	}
 
-	// Find and parse the JSON results.
-	var jsonPath string
-	for _, arg := range args {
-		if strings.HasPrefix(arg, "/") || strings.HasPrefix(arg, "./") {
-			candidate := filepath.Join(arg, "gocachemark_results.json")
-			if _, err := os.Stat(candidate); err == nil {
-				jsonPath = candidate
-				break
-			}
-		}
-	}
-
-	// Try to find -outdir argument.
-	for i, arg := range args {
-		if arg == "-outdir" && i+1 < len(args) {
-			jsonPath = filepath.Join(args[i+1], "gocachemark_results.json")
-			break
-		}
-	}
-
-	if jsonPath == "" {
-		return nil, fmt.Errorf("could not find results JSON")
-	}
-
-	return loadResults(jsonPath)
+	return loadResults(filepath.Join(outdir, "gocachemark_results.json"))
 }
 
 // Results represents gocachemark JSON output.
@@ -271,9 +254,8 @@ type Benchmark struct {
 }
 
 type CacheResult struct {
-	Name    string             `json:"name"`
-	Rates   map[string]float64 `json:"rates"`
-	AvgRate float64            `json:"avgRate"`
+	Name    string  `json:"name"`
+	AvgRate float64 `json:"avgRate"`
 }
 
 type RankEntry struct {
@@ -285,18 +267,22 @@ type RankEntry struct {
 	Bronze int    `json:"bronze"`
 }
 
-// getHitRateResults extracts cache results for a test, skipping non-test fields like "sizes".
-func (r *Results) getHitRateResults(testName string) ([]CacheResult, error) {
-	raw, ok := r.HitRate[testName]
-	if !ok {
-		return nil, fmt.Errorf("test %q not found", testName)
-	}
+type placement struct {
+	medal string
+	value float64
+}
 
-	var results []CacheResult
-	if err := json.Unmarshal(raw, &results); err != nil {
-		return nil, err // Likely "sizes" or other non-test field
+// hitRateResults extracts cache results for a test, skipping non-test fields like "sizes".
+func (r *Results) hitRateResults(name string) ([]CacheResult, error) {
+	raw, ok := r.HitRate[name]
+	if !ok {
+		return nil, fmt.Errorf("test %q not found", name)
 	}
-	return results, nil
+	var out []CacheResult
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func loadResults(path string) (*Results, error) {
@@ -311,125 +297,108 @@ func loadResults(path string) (*Results, error) {
 	return &results, nil
 }
 
-func validateHitrate(results *Results) error {
+func validateHitrate(res *Results) error {
 	fmt.Println("=== Hitrate Validation ===")
 
-	var failures []string
-
-	for testName, goal := range hitrateGoals {
-		cacheResults, err := results.getHitRateResults(testName)
+	var fails []string
+	for name, goal := range hitrateGoals {
+		caches, err := res.hitRateResults(name)
 		if err != nil {
-			fmt.Printf("? %s: %v\n", testName, err)
+			fmt.Printf("? %s: %v\n", name, err)
 			continue
 		}
 
-		// Find multicache result.
 		var avg float64
 		var found bool
-		for _, cr := range cacheResults {
-			if cr.Name == "multicache" {
-				avg = cr.AvgRate
+		for _, c := range caches {
+			if c.Name == "multicache" {
+				avg = c.AvgRate
 				found = true
 				break
 			}
 		}
-
 		if !found {
-			fmt.Printf("? %s: multicache not found\n", testName)
+			fmt.Printf("? %s: multicache not found\n", name)
 			continue
 		}
 
 		// Use small tolerance for floating point comparison (0.01%).
 		if avg >= goal-0.01 {
-			fmt.Printf("✓ %s: %.2f%% (goal: %.2f%%)\n", testName, avg, goal)
+			fmt.Printf("✓ %s: %.2f%% (goal: %.2f%%)\n", name, avg, goal)
 		} else {
-			fmt.Printf("✗ %s: %.2f%% (goal: %.2f%%)\n", testName, avg, goal)
-			failures = append(failures, fmt.Sprintf("%s: %.2f%% < %.2f%%", testName, avg, goal))
+			fmt.Printf("✗ %s: %.2f%% (goal: %.2f%%)\n", name, avg, goal)
+			fails = append(fails, fmt.Sprintf("%s: %.2f%% < %.2f%%", name, avg, goal))
 		}
 	}
 
-	if len(failures) > 0 {
-		return fmt.Errorf("hitrate goals not met:\n  %s", strings.Join(failures, "\n  "))
+	if len(fails) > 0 {
+		return fmt.Errorf("hitrate goals not met:\n  %s", strings.Join(fails, "\n  "))
 	}
-
 	fmt.Println("\nAll hitrate goals met!")
 	return nil
 }
 
-func validateCompetitive(results, prevResults *Results) error {
+func validateCompetitive(res, prev *Results) error {
 	// Find multicache in rankings.
-	var multicacheRank *RankEntry
-	for i := range results.Rankings {
-		if results.Rankings[i].Name == "multicache" {
-			multicacheRank = &results.Rankings[i]
+	var mc *RankEntry
+	for i := range res.Rankings {
+		if res.Rankings[i].Name == "multicache" {
+			mc = &res.Rankings[i]
 			break
 		}
 	}
-
-	if multicacheRank == nil {
+	if mc == nil {
 		return fmt.Errorf("multicache not found in rankings")
 	}
 
-	// Report ranking changes if we have previous results.
-	if prevResults != nil {
+	if prev != nil {
 		fmt.Println("=== Ranking Changes ===")
-		reportChanges(prevResults, results)
+		reportChanges(prev, res)
 	}
 
 	fmt.Println("\n=== Final Validation ===")
 
-	var failures []string
-
-	// Check minimum score.
-	if multicacheRank.Score >= minMulticacheScore {
-		fmt.Printf("✓ multicache score: %d (goal: ≥%d)\n", multicacheRank.Score, minMulticacheScore)
+	var fails []string
+	if mc.Score >= minMulticacheScore {
+		fmt.Printf("✓ multicache score: %d (goal: ≥%d)\n", mc.Score, minMulticacheScore)
 	} else {
-		fmt.Printf("✗ multicache score: %d (goal: ≥%d)\n", multicacheRank.Score, minMulticacheScore)
-		failures = append(failures, fmt.Sprintf("score %d < %d", multicacheRank.Score, minMulticacheScore))
+		fmt.Printf("✗ multicache score: %d (goal: ≥%d)\n", mc.Score, minMulticacheScore)
+		fails = append(fails, fmt.Sprintf("score %d < %d", mc.Score, minMulticacheScore))
 	}
 
-	// Check for point reduction.
-	if prevResults != nil {
+	if prev != nil {
 		var prevScore int
-		for _, r := range prevResults.Rankings {
+		for _, r := range prev.Rankings {
 			if r.Name == "multicache" {
 				prevScore = r.Score
 				break
 			}
 		}
-
-		if multicacheRank.Score >= prevScore {
-			fmt.Printf("✓ No point reduction (was %d, now %d)\n", prevScore, multicacheRank.Score)
+		if mc.Score >= prevScore {
+			fmt.Printf("✓ No point reduction (was %d, now %d)\n", prevScore, mc.Score)
 		} else {
-			fmt.Printf("✗ Point reduction: %d → %d\n", prevScore, multicacheRank.Score)
-			failures = append(failures, fmt.Sprintf("points reduced from %d to %d", prevScore, multicacheRank.Score))
+			fmt.Printf("✗ Point reduction: %d → %d\n", prevScore, mc.Score)
+			fails = append(fails, fmt.Sprintf("points reduced from %d to %d", prevScore, mc.Score))
 		}
 	}
 
-	if len(failures) > 0 {
-		return fmt.Errorf("competitive validation failed:\n  %s", strings.Join(failures, "\n  "))
+	if len(fails) > 0 {
+		return fmt.Errorf("competitive validation failed:\n  %s", strings.Join(fails, "\n  "))
 	}
-
 	return nil
 }
 
 func reportChanges(prev, curr *Results) {
-	// Build maps of benchmark placements: cache -> benchmark -> placement
-	type placement struct {
-		medal string // "gold", "silver", "bronze", or ""
-		value float64
-	}
-	prevPlacements := buildPlacementMap(prev)
-	currPlacements := buildPlacementMap(curr)
+	prevP := buildPlacementMap(prev)
+	currP := buildPlacementMap(curr)
 
-	// Build maps for score comparison.
-	prevRanks := make(map[string]RankEntry)
+	prevR := make(map[string]RankEntry)
 	for _, r := range prev.Rankings {
-		prevRanks[r.Name] = r
+		prevR[r.Name] = r
 	}
 
 	for _, r := range curr.Rankings {
-		p, ok := prevRanks[r.Name]
+		p, ok := prevR[r.Name]
 		if !ok {
 			fmt.Printf("%s: new entry with %d points\n", r.Name, r.Score)
 			continue
@@ -446,102 +415,70 @@ func reportChanges(prev, curr *Results) {
 		}
 		fmt.Printf("%s: %d → %d (%s%d points)\n", r.Name, p.Score, r.Score, sign, delta)
 
-		// Find which benchmarks changed for this cache.
-		prevCache := prevPlacements[r.Name]
-		currCache := currPlacements[r.Name]
-		for bench, currP := range currCache {
-			prevP := prevCache[bench]
-			if currP.medal != prevP.medal {
-				prevMedal := prevP.medal
-				if prevMedal == "" {
-					prevMedal = "none"
-				}
-				currMedal := currP.medal
-				if currMedal == "" {
-					currMedal = "none"
-				}
-				if currP.value != 0 && prevP.value != 0 {
-					fmt.Printf("  %s: %s → %s (%.2f%% → %.2f%%)\n", bench, prevMedal, currMedal, prevP.value, currP.value)
-				} else {
-					fmt.Printf("  %s: %s → %s\n", bench, prevMedal, currMedal)
-				}
+		// Show which benchmarks changed for this cache.
+		for bench, cp := range currP[r.Name] {
+			pp := prevP[r.Name][bench]
+			if cp.medal == pp.medal {
+				continue
+			}
+			pm, cm := pp.medal, cp.medal
+			if pm == "" {
+				pm = "none"
+			}
+			if cm == "" {
+				cm = "none"
+			}
+			if cp.value != 0 && pp.value != 0 {
+				fmt.Printf("  %s: %s → %s (%.2f%% → %.2f%%)\n", bench, pm, cm, pp.value, cp.value)
+			} else {
+				fmt.Printf("  %s: %s → %s\n", bench, pm, cm)
 			}
 		}
 	}
 }
 
-// buildPlacementMap builds a map of cache -> benchmark -> {medal, value}.
-func buildPlacementMap(r *Results) map[string]map[string]struct {
-	medal string
-	value float64
-} {
-	result := make(map[string]map[string]struct {
-		medal string
-		value float64
-	})
-
-	// Initialize maps for all caches.
+func buildPlacementMap(r *Results) map[string]map[string]placement {
+	out := make(map[string]map[string]placement)
 	for _, rank := range r.Rankings {
-		result[rank.Name] = make(map[string]struct {
-			medal string
-			value float64
-		})
-	}
-
-	// Map display names to JSON keys for hit rate lookup.
-	hitRateKeys := map[string]string{
-		"CDN":           "cdn",
-		"Meta":          "meta",
-		"Zipf":          "zipf",
-		"Twitter":       "twitter",
-		"Wikipedia":     "wikipedia",
-		"Thesios Block": "thesiosBlock",
-		"Thesios File":  "thesiosFile",
-		"IBM Docker":    "ibmDocker",
-		"Tencent Photo": "tencentPhoto",
+		out[rank.Name] = make(map[string]placement)
 	}
 
 	for _, cat := range r.MedalTable.Categories {
-		for _, bench := range cat.Benchmarks {
-			benchName := cat.Name + "/" + bench.Name
+		for _, b := range cat.Benchmarks {
+			name := cat.Name + "/" + b.Name
 
 			// Get hit rate values if applicable.
-			var values map[string]float64
+			var vals map[string]float64
 			if cat.Name == "Hit Rate" {
-				if key, ok := hitRateKeys[bench.Name]; ok {
-					if caches, err := r.getHitRateResults(key); err == nil {
-						values = make(map[string]float64)
+				if key, ok := hitRateKeys[b.Name]; ok {
+					if caches, err := r.hitRateResults(key); err == nil {
+						vals = make(map[string]float64)
 						for _, c := range caches {
-							values[c.Name] = c.AvgRate
+							vals[c.Name] = c.AvgRate
 						}
 					}
 				}
 			}
 
-			// Record placements.
-			for cache := range result {
+			for cache := range out {
 				var medal string
 				switch cache {
-				case bench.Gold:
+				case b.Gold:
 					medal = "gold"
-				case bench.Silver:
+				case b.Silver:
 					medal = "silver"
-				case bench.Bronze:
+				case b.Bronze:
 					medal = "bronze"
 				}
-				val := 0.0
-				if values != nil {
-					val = values[cache]
+				var v float64
+				if vals != nil {
+					v = vals[cache]
 				}
-				result[cache][benchName] = struct {
-					medal string
-					value float64
-				}{medal, val}
+				out[cache][name] = placement{medal, v}
 			}
 		}
 	}
-
-	return result
+	return out
 }
 
 func fatal(format string, args ...any) {
