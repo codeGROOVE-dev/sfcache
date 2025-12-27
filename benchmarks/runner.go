@@ -81,11 +81,8 @@ func main() {
 	// Prepare output directory for results.
 	benchmarksDir := filepath.Join(multicacheDir, "benchmarks")
 
-	// Load previous results for comparison (competitive mode).
-	var prevResults *Results
-	if *competitive {
-		prevResults, _ = loadResults(filepath.Join(benchmarksDir, "gocachemark_results.json"))
-	}
+	// Load reference results for comparison.
+	ref, _ := loadResults(filepath.Join(benchmarksDir, "gocachemark_results.json"))
 
 	// Build gocachemark arguments.
 	args := []string{"run", "."}
@@ -103,6 +100,14 @@ func main() {
 	}
 	args = append(args, "-outdir", outdir)
 
+	// Add filters if env vars are set.
+	if v := os.Getenv("TESTS"); v != "" {
+		args = append(args, "-tests", v)
+	}
+	if v := os.Getenv("SUITES"); v != "" {
+		args = append(args, "-suites", v)
+	}
+
 	// Run gocachemark with streaming output.
 	mode := "multicache"
 	if *competitive {
@@ -114,10 +119,15 @@ func main() {
 		fatal("running gocachemark: %v", err)
 	}
 
-	// Validate results.
+	// Show deltas against reference.
 	fmt.Println()
+	if ref != nil {
+		showDeltas(ref, results)
+	}
+
+	// Validate results.
 	if *competitive {
-		if err := validateCompetitive(results, prevResults); err != nil {
+		if err := validateCompetitive(results, ref); err != nil {
 			fatal("%v", err)
 		}
 		fmt.Printf("\nResults saved to %s/\n", benchmarksDir)
@@ -233,6 +243,8 @@ func runGocachemark(dir string, args []string, outdir string) (*Results, error) 
 // Results represents gocachemark JSON output.
 type Results struct {
 	HitRate    map[string]json.RawMessage `json:"hitRate"`
+	Latency    map[string]json.RawMessage `json:"latency"`
+	Throughput map[string]json.RawMessage `json:"throughput"`
 	Rankings   []RankEntry                `json:"rankings"`
 	MedalTable MedalTable                 `json:"medalTable"`
 }
@@ -256,6 +268,16 @@ type Benchmark struct {
 type CacheResult struct {
 	Name    string  `json:"name"`
 	AvgRate float64 `json:"avgRate"`
+}
+
+type LatencyResult struct {
+	Name    string  `json:"name"`
+	AvgNsOp float64 `json:"avgNsOp"`
+}
+
+type ThroughputResult struct {
+	Name   string  `json:"name"`
+	AvgQps float64 `json:"avgQps"`
 }
 
 type RankEntry struct {
@@ -336,6 +358,111 @@ func validateHitrate(res *Results) error {
 	}
 	fmt.Println("\nAll hitrate goals met!")
 	return nil
+}
+
+func showDeltas(ref, curr *Results) {
+	fmt.Println("=== Deltas vs Reference ===")
+	var any bool
+
+	// Hit rate deltas (higher is better).
+	for name := range curr.HitRate {
+		if name == "sizes" {
+			continue
+		}
+		refCaches, err := ref.hitRateResults(name)
+		if err != nil {
+			continue
+		}
+		currCaches, err := curr.hitRateResults(name)
+		if err != nil {
+			continue
+		}
+		refVal := findHitRate(refCaches, "multicache")
+		currVal := findHitRate(currCaches, "multicache")
+		if refVal == 0 {
+			continue
+		}
+		delta := currVal - refVal
+		pct := delta / refVal * 100
+		any = true
+		fmt.Printf("  hitrate/%s: %.2f%% → %.2f%% (%+.2f, %+.1f%%)\n", name, refVal, currVal, delta, pct)
+	}
+
+	// Latency deltas (lower is better).
+	for name := range curr.Latency {
+		var refResults, currResults []LatencyResult
+		if raw, ok := ref.Latency[name]; ok {
+			json.Unmarshal(raw, &refResults)
+		}
+		if raw, ok := curr.Latency[name]; ok {
+			json.Unmarshal(raw, &currResults)
+		}
+		refVal := findLatency(refResults, "multicache")
+		currVal := findLatency(currResults, "multicache")
+		if refVal == 0 {
+			continue
+		}
+		delta := currVal - refVal
+		pct := delta / refVal * 100
+		any = true
+		// Negative delta is good for latency
+		fmt.Printf("  latency/%s: %.1fns → %.1fns (%+.1f, %+.1f%%)\n", name, refVal, currVal, delta, pct)
+	}
+
+	// Throughput deltas (higher is better).
+	for name := range curr.Throughput {
+		if name == "threads" {
+			continue
+		}
+		var refResults, currResults []ThroughputResult
+		if raw, ok := ref.Throughput[name]; ok {
+			json.Unmarshal(raw, &refResults)
+		}
+		if raw, ok := curr.Throughput[name]; ok {
+			json.Unmarshal(raw, &currResults)
+		}
+		refVal := findThroughput(refResults, "multicache")
+		currVal := findThroughput(currResults, "multicache")
+		if refVal == 0 {
+			continue
+		}
+		delta := currVal - refVal
+		pct := delta / refVal * 100
+		any = true
+		fmt.Printf("  throughput/%s: %.2fM → %.2fM (%+.2fM, %+.1f%%)\n", name, refVal/1e6, currVal/1e6, delta/1e6, pct)
+	}
+
+	if !any {
+		fmt.Println("  (no reference data)")
+	}
+	fmt.Println()
+}
+
+func findHitRate(results []CacheResult, name string) float64 {
+	for _, r := range results {
+		if r.Name == name {
+			return r.AvgRate
+		}
+	}
+	return 0
+}
+
+func findLatency(results []LatencyResult, name string) float64 {
+	for _, r := range results {
+		if r.Name == name {
+			return r.AvgNsOp
+		}
+	}
+	return 0
+}
+
+func findThroughput(results []ThroughputResult, name string) float64 {
+	for _, r := range results {
+		if r.Name == name {
+			return r.AvgQps
+		}
+	}
+	return 0
 }
 
 func validateCompetitive(res, prev *Results) error {
