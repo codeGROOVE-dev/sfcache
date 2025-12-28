@@ -50,7 +50,7 @@ var hitRateKeys = map[string]string{
 var goldMedalists = "multicache,otter,clock,theine,sieve,freelru-sync"
 
 const (
-	minMulticacheScore = 160
+	minMulticacheScore = 163
 	gocachemarkRepo    = "github.com/tstromberg/gocachemark"
 	multicacheModule   = "github.com/codeGROOVE-dev/multicache"
 )

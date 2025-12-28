@@ -36,3 +36,7 @@ go.work.sum
 
 # added by lint-install
 out/
+
+gocachemark_results.html
+benchmarks/gocachemark_results.html
+

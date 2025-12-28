@@ -4,77 +4,25 @@ package multicache
 import (
 	"sync"
 	"time"
-)
 
-const numFlightShards = 256
+	"github.com/puzpuzpuz/xsync/v4"
+)
 
 // Cache is an in-memory cache. All operations are synchronous and infallible.
 type Cache[K comparable, V any] struct {
-	flights    [numFlightShards]flightGroup[K, V]
+	flights    *xsync.Map[K, *flightCall[V]]
 	memory     *s3fifo[K, V]
 	defaultTTL time.Duration
 	noExpiry   bool
 }
 
-// flightGroup deduplicates concurrent calls for the same key.
+// flightCall holds an in-flight computation for singleflight deduplication.
 //
 //nolint:govet // fieldalignment: semantic grouping preferred
-type flightGroup[K comparable, V any] struct {
-	mu    sync.Mutex
-	calls map[K]*flightCall[V]
-	pool  sync.Pool
-}
-
-//nolint:govet // fieldalignment: semantic grouping preferred
 type flightCall[V any] struct {
-	wg     sync.WaitGroup
-	val    V
-	err    error
-	shared bool
-}
-
-// do executes fn once per key; concurrent callers share the result.
-func (g *flightGroup[K, V]) do(key K, fn func() (V, error)) (V, error) {
-	g.mu.Lock()
-	if g.calls == nil {
-		g.calls = make(map[K]*flightCall[V])
-	}
-	if c, ok := g.calls[key]; ok {
-		c.shared = true
-		g.mu.Unlock()
-		c.wg.Wait()
-		return c.val, c.err
-	}
-
-	var c *flightCall[V]
-	if pooled, ok := g.pool.Get().(*flightCall[V]); ok && pooled != nil {
-		c = pooled
-	} else {
-		c = &flightCall[V]{}
-	}
-	c.wg.Add(1)
-	g.calls[key] = c
-	g.mu.Unlock()
-
-	c.val, c.err = fn()
-
-	g.mu.Lock()
-	delete(g.calls, key)
-	shared := c.shared
-	g.mu.Unlock()
-	c.wg.Done()
-
-	val, err := c.val, c.err
-
-	if !shared {
-		var zero V
-		c.val = zero
-		c.err = nil
-		c.shared = false
-		g.pool.Put(c)
-	}
-
-	return val, err
+	wg  sync.WaitGroup
+	val V
+	err error
 }
 
 // New creates an in-memory cache.
@@ -85,6 +33,7 @@ func New[K comparable, V any](opts ...Option) *Cache[K, V] {
 	}
 
 	return &Cache[K, V]{
+		flights:    xsync.NewMap[K, *flightCall[V]](),
 		memory:     newS3FIFO[K, V](cfg),
 		defaultTTL: cfg.defaultTTL,
 		noExpiry:   cfg.defaultTTL == 0,
@@ -134,40 +83,39 @@ func (c *Cache[K, V]) GetSet(key K, loader func() (V, error), ttl ...time.Durati
 		return val, nil
 	}
 
-	idx := flightShard(key)
-	return c.flights[idx].do(key, func() (V, error) {
-		if val, ok := c.memory.get(key); ok {
-			return val, nil
-		}
+	call, loaded := c.flights.LoadOrCompute(key, func() (*flightCall[V], bool) {
+		fc := &flightCall[V]{}
+		fc.wg.Add(1)
+		return fc, false
+	})
 
-		val, err := loader()
-		if err != nil {
-			return val, err
-		}
+	if loaded {
+		// Another goroutine is computing; wait for result.
+		call.wg.Wait()
+		return call.val, call.err
+	}
 
+	// We're the first; check cache again then compute.
+	if val, ok := c.memory.get(key); ok {
+		c.flights.Delete(key)
+		call.wg.Done()
+		return val, nil
+	}
+
+	val, err := loader()
+	if err == nil {
 		var t time.Duration
 		if len(ttl) > 0 {
 			t = ttl[0]
 		}
 		c.memory.set(key, val, timeToNano(c.expiry(t)))
-
-		return val, nil
-	})
-}
-
-func flightShard[K comparable](key K) int {
-	switch k := any(key).(type) {
-	case int:
-		return k & (numFlightShards - 1)
-	case int64:
-		return int(k) & (numFlightShards - 1)
-	case uint64:
-		return int(k) & (numFlightShards - 1) //nolint:gosec // result is always 0-255
-	case string:
-		return int(hashString(k)) & (numFlightShards - 1) //nolint:gosec // result is always 0-255
-	default:
-		return 0
 	}
+
+	call.val, call.err = val, err
+	c.flights.Delete(key)
+	call.wg.Done()
+
+	return val, err
 }
 
 // Len returns the number of entries.

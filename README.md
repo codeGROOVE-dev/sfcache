@@ -58,25 +58,20 @@ For maximum efficiency, all backends support S2 or Zstd compression via `pkg/sto
 
 ## Performance
 
-
-[gocachemark](https://github.com/tstromberg/gocachemark) compares cache libraries across hit rate, latency, throughput, and memory. Overall scores (Dec 2025):
-
-```
-#1  multicache   160 points (13 gold, 3 silver, 1 bronze)
-#2  otter         80 points
-#3  clock         70 points
-```
+multicache has been exhaustively tested for performance using [gocachemark](https://github.com/tstromberg/gocachemark). As of Dec 2025, it's the highest performing cache implementation for Go.
 
 Where multicache wins:
 
-- **Hit rate**: Wins 6 of 9 production traces. +4.9% on Meta, +4.1% on Tencent Photo, +1.6% on Wikipedia
-- **Throughput**: 12x faster Set, 1.6x faster Get vs otter at 32 threads
-- **Latency**: 9-11ns Get, zero allocations
+- **Throughput**: 1 billion ints/second at 16 threads or higher. (2-3X faster than otter)
+- **Hit rate**: Highest average across datasets (1.6% higher than sieve, 4.4% higher than otter)
+- **Latency**: 9-11ns Get, zero allocations (3-4X lower latency than otter)
 
 Where others win:
 
 - **Memory**: freelru and otter use less memory per entry
 - **Some traces**: CLOCK/LRU marginally better on purely temporal workloads (IBM Docker, Thesios)
+
+Much of the credit for high throughput goes to [puzpuzpuz/xsync](https://github.com/puzpuzpuz/xsync). While highly sharded maps and flightGroups performed well, you can't beat xsync's lock-free data structures.
 
 Run `make competive-bench` for full results.
 

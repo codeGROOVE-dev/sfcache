@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/puzpuzpuz/xsync/v4"
 )
 
 const asyncTimeout = 5 * time.Second
@@ -13,7 +15,7 @@ const asyncTimeout = 5 * time.Second
 // TieredCache combines an in-memory cache with persistent storage.
 type TieredCache[K comparable, V any] struct {
 	Store      Store[K, V] // direct access to persistence layer
-	flights    [numFlightShards]flightGroup[K, V]
+	flights    *xsync.Map[K, *flightCall[V]]
 	memory     *s3fifo[K, V]
 	defaultTTL time.Duration
 }
@@ -31,6 +33,7 @@ func NewTiered[K comparable, V any](store Store[K, V], opts ...Option) (*TieredC
 
 	cache := &TieredCache[K, V]{
 		Store:      store,
+		flights:    xsync.NewMap[K, *flightCall[V]](),
 		memory:     newS3FIFO[K, V](cfg),
 		defaultTTL: cfg.defaultTTL,
 	}
@@ -140,41 +143,63 @@ func (c *TieredCache[K, V]) GetSet(ctx context.Context, key K, loader func(conte
 		return val, nil
 	}
 
-	idx := flightShard(key)
-	return c.flights[idx].do(key, func() (V, error) {
-		if val, ok := c.memory.get(key); ok {
-			return val, nil
-		}
-
-		val, expiry, found, err := c.Store.Get(ctx, key)
-		if err != nil {
-			var zero V
-			return zero, fmt.Errorf("persistence load: %w", err)
-		}
-		if found {
-			c.memory.set(key, val, timeToNano(expiry))
-			return val, nil
-		}
-
-		val, err = loader(ctx)
-		if err != nil {
-			var zero V
-			return zero, err
-		}
-
-		var t time.Duration
-		if len(ttl) > 0 {
-			t = ttl[0]
-		}
-		exp := c.expiry(t)
-		c.memory.set(key, val, timeToNano(exp))
-
-		if err := c.Store.Set(ctx, key, val, exp); err != nil {
-			slog.Warn("GetSet persistence failed", "key", key, "error", err)
-		}
-
-		return val, nil
+	call, loaded := c.flights.LoadOrCompute(key, func() (*flightCall[V], bool) {
+		fc := &flightCall[V]{}
+		fc.wg.Add(1)
+		return fc, false
 	})
+
+	if loaded {
+		call.wg.Wait()
+		return call.val, call.err
+	}
+
+	// We're the first; check cache and store again then compute.
+	if v, ok := c.memory.get(key); ok {
+		c.flights.Delete(key)
+		call.wg.Done()
+		return v, nil
+	}
+
+	val, expiry, found, err = c.Store.Get(ctx, key)
+	if err != nil {
+		call.err = fmt.Errorf("persistence load: %w", err)
+		c.flights.Delete(key)
+		call.wg.Done()
+		return zero, call.err
+	}
+	if found {
+		c.memory.set(key, val, timeToNano(expiry))
+		call.val = val
+		c.flights.Delete(key)
+		call.wg.Done()
+		return val, nil
+	}
+
+	val, err = loader(ctx)
+	if err != nil {
+		call.err = err
+		c.flights.Delete(key)
+		call.wg.Done()
+		return zero, err
+	}
+
+	var t time.Duration
+	if len(ttl) > 0 {
+		t = ttl[0]
+	}
+	exp := c.expiry(t)
+	c.memory.set(key, val, timeToNano(exp))
+
+	if err := c.Store.Set(ctx, key, val, exp); err != nil {
+		slog.Warn("GetSet persistence failed", "key", key, "error", err)
+	}
+
+	call.val = val
+	c.flights.Delete(key)
+	call.wg.Done()
+
+	return val, nil
 }
 
 // Delete removes from memory and persistence.
