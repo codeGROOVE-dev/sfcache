@@ -2647,3 +2647,136 @@ func TestS3FIFO_EvictOne_SmallQueuePath(t *testing.T) {
 	}
 	t.Logf("Remaining items: %d (capacity: %d)", remaining, cache.capacity)
 }
+
+// TestS3FIFO_GhostHashConsistency is a regression test for ghost queue hash handling.
+//
+// Key insight: The bloom filter needs full 64-bit hashes for proper double hashing
+// (it uses h1=h and h2=h>>32). If upper 32 bits are zero, all k hash functions
+// collapse to the same value, massively increasing false positive rate.
+//
+// The frequency ring only needs 30-bit hashes (lower bits of the 64-bit hash).
+func TestS3FIFO_GhostHashConsistency(t *testing.T) {
+	// Test frequency ring with 32-bit hashes
+	var ring ghostFreqRing
+
+	h32 := uint32(0x12345678)
+	ring.add(h32, 5)
+
+	if freq, ok := ring.lookup(h32); !ok || freq != 5 {
+		t.Errorf("lookup(h32) = %d, %v; want 5, true", freq, ok)
+	}
+
+	// Different hash should fail
+	differentHash := uint32(0xDEADBEEF)
+	if _, ok := ring.lookup(differentHash); ok {
+		t.Error("lookup(differentHash) should fail - different hash value")
+	}
+}
+
+// TestS3FIFO_BloomFilterDoubleHashing verifies bloom filter needs full 64-bit hashes.
+// When upper 32 bits are zero, h2=h>>32 becomes 0, and all k hash functions
+// compute the same index, degrading the bloom filter to a single hash.
+func TestS3FIFO_BloomFilterDoubleHashing(t *testing.T) {
+	// Test that bloom filter works correctly with full 64-bit hashes
+	bloom := newBloomFilter(1000, 0.0001)
+
+	// Add with full 64-bit hash (both halves non-zero)
+	h64 := uint64(0xDEADBEEF12345678)
+	bloom.Add(h64)
+
+	if !bloom.Contains(h64) {
+		t.Error("bloom.Contains(h64) should return true")
+	}
+
+	// Different hash should (almost certainly) not be found
+	differentH64 := uint64(0x1234567890ABCDEF)
+	if bloom.Contains(differentH64) {
+		t.Log("Warning: false positive (possible but unlikely)")
+	}
+
+	// Demonstrate the problem with truncated hashes:
+	// If we only use lower 32 bits, h2 = 0 and bloom degrades badly
+	bloom2 := newBloomFilter(1000, 0.0001)
+	h32Extended := uint64(uint32(h64)) // upper 32 bits = 0!
+
+	bloom2.Add(h32Extended)
+
+	// This works but the bloom filter is now much less effective
+	// because h2 = h32Extended >> 32 = 0
+	if !bloom2.Contains(h32Extended) {
+		t.Error("bloom.Contains should still work, just with higher FP rate")
+	}
+
+	t.Logf("h64=0x%016X, h32Extended=0x%016X, h2=%d",
+		h64, h32Extended, h32Extended>>32)
+}
+
+// TestS3FIFO_GhostFrequencyRing verifies frequency ring uses full 32-bit hashes.
+func TestS3FIFO_GhostFrequencyRing(t *testing.T) {
+	// Test various 32-bit hashes
+	testCases := []uint32{
+		0x00000000,
+		0x12345678,
+		0xDEADBEEF,
+		0xFFFFFFFF,
+	}
+
+	for _, h := range testCases {
+		var ring ghostFreqRing
+		ring.add(h, 7)
+
+		if freq, ok := ring.lookup(h); !ok || freq != 7 {
+			t.Errorf("hash 0x%08X: lookup failed or wrong freq (got %d, ok=%v)",
+				h, freq, ok)
+		}
+	}
+}
+
+// TestS3FIFO_GhostEvictionReinsertConsistency tests that evicted keys are
+// correctly recognized as ghosts when reinserted. This catches hash mismatch
+// bugs where addToGhost uses a different hash than setWithHash's Contains check.
+//
+// The bug this catches: if addToGhost uses a truncated hash (e.g., 30 bits
+// extended to 64 bits with upper bits = 0), but setWithHash uses the full
+// 64-bit hash for bloom Contains, evicted keys won't be recognized as ghosts.
+func TestS3FIFO_GhostEvictionReinsertConsistency(t *testing.T) {
+	// Small cache to force evictions quickly
+	cache := newS3FIFO[string, int](&config{size: 100})
+
+	// Phase 1: Fill cache and force evictions
+	// Insert 200 keys to ensure ~100 get evicted to ghost
+	for i := range 200 {
+		cache.set(fmt.Sprintf("key%d", i), i, 0)
+	}
+
+	// Phase 2: Reinsert evicted keys - they should go to main (recognized as ghost)
+	// The first ~100 keys should have been evicted
+	mainCount := 0
+	for i := range 50 {
+		key := fmt.Sprintf("key%d", i)
+
+		// Access key to bump freq so it gets evicted with peakFreq >= 1
+		// (needed for ghost frequency tracking)
+		cache.set(key, i*10, 0)
+
+		// Check if entry went to main queue (ghost hit) or small queue
+		if ent, ok := cache.getEntry(key); ok && !ent.inSmall() {
+			mainCount++
+		}
+	}
+
+	// If ghost recognition works, most reinserted keys should go to main.
+	// With broken hash (addToGhost using truncated hash), keys won't be
+	// recognized and will all go to small queue.
+	//
+	// We expect at least 30% to be recognized as ghosts. The exact number
+	// depends on bloom filter FP rate and ghost queue rotation timing.
+	minExpected := 15 // 30% of 50
+	if mainCount < minExpected {
+		t.Errorf("Only %d/%d reinserted keys recognized as ghosts (went to main); "+
+			"expected at least %d. This suggests addToGhost and setWithHash "+
+			"are using inconsistent hashes.", mainCount, 50, minExpected)
+	}
+
+	t.Logf("Ghost recognition: %d/50 keys went to main queue", mainCount)
+}

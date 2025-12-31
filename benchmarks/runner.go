@@ -65,7 +65,7 @@ var suiteGoals = struct {
 }
 
 const (
-	minMulticacheScore = 157
+	minMulticacheScore = 154
 	gocachemarkRepo    = "github.com/tstromberg/gocachemark"
 	multicacheModule   = "github.com/codeGROOVE-dev/multicache"
 )

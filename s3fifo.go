@@ -194,6 +194,7 @@ func timeToSec(t time.Time) uint32 {
 	if t.IsZero() {
 		return 0
 	}
+	//nolint:gosec // G115: Unix seconds fit in uint32 until year 2106
 	return uint32(t.Unix())
 }
 
@@ -204,101 +205,100 @@ type entry[K comparable, V any] struct {
 	value     atomic.Value // stores V atomically for safe concurrent access
 	prev      *entry[K, V]
 	next      *entry[K, V]
+	hash64    uint64        // full 64-bit hash for bloom filter (avoids re-hashing on eviction)
 	expirySec atomic.Uint32 // 0 means no expiry; seconds since Unix epoch
-	freqPeak  atomic.Uint32 // bits 0-3: freq (0-15), bits 4-31: peakFreq
-	hashFlags uint32        // bits 0-29: hash, bit 30: inSmall, bit 31: onDeathRow
+	freqFlags atomic.Uint32 // bits 0-3: freq, bits 4-9: peakFreq, bit 30: inSmall, bit 31: onDeathRow
 }
 
-// Bitfield constants for freqPeak and hashFlags.
+// Bitfield constants for freqFlags.
 const (
-	freqMask      = 0xF        // bits 0-3 for freq
-	peakFreqShift = 4          // peakFreq starts at bit 4
-	hashMask      = 0x3FFFFFFF // bits 0-29 for hash
-	inSmallBit    = 1 << 30    // bit 30
-	onDeathRowBit = 1 << 31    // bit 31
+	freqMask      = 0xF  // bits 0-3 for freq (0-15)
+	peakFreqShift = 4    // peakFreq starts at bit 4
+	peakFreqMask  = 0x3F // bits 4-9 for peakFreq (0-63), accessed after shift
+	inSmallBit    = 1 << 30
+	onDeathRowBit = 1 << 31
 )
 
 // freq returns the access frequency (0-15).
-func (e *entry[K, V]) freq() uint32 { return e.freqPeak.Load() & freqMask }
+func (e *entry[K, V]) freq() uint32 { return e.freqFlags.Load() & freqMask }
 
-// peakFreq returns the peak frequency for ghost restoration.
-func (e *entry[K, V]) peakFreq() uint32 { return e.freqPeak.Load() >> peakFreqShift }
+// peakFreq returns the peak frequency for ghost restoration (0-63).
+func (e *entry[K, V]) peakFreq() uint32 {
+	return (e.freqFlags.Load() >> peakFreqShift) & peakFreqMask
+}
 
 // setFreq sets the access frequency via CAS loop.
 func (e *entry[K, V]) setFreq(f uint32) {
 	for {
-		old := e.freqPeak.Load()
-		new := (old &^ freqMask) | (f & freqMask)
-		if e.freqPeak.CompareAndSwap(old, new) {
+		cur := e.freqFlags.Load()
+		updated := (cur &^ freqMask) | (f & freqMask)
+		if e.freqFlags.CompareAndSwap(cur, updated) {
 			return
 		}
 	}
 }
 
-// incFreq increments freq up to max via CAS loop.
-func (e *entry[K, V]) incFreq(max uint32) {
+// incFreq increments freq up to limit via CAS loop.
+func (e *entry[K, V]) incFreq(limit uint32) {
 	for {
-		old := e.freqPeak.Load()
-		f := old & freqMask
-		if f >= max {
+		cur := e.freqFlags.Load()
+		f := cur & freqMask
+		if f >= limit {
 			return
 		}
-		new := (old &^ freqMask) | (f + 1)
-		if e.freqPeak.CompareAndSwap(old, new) {
+		updated := (cur &^ freqMask) | (f + 1)
+		if e.freqFlags.CompareAndSwap(cur, updated) {
 			return
 		}
 	}
 }
 
-// incPeakFreq increments peakFreq up to max via CAS loop.
-func (e *entry[K, V]) incPeakFreq(max uint32) {
+// incPeakFreq increments peakFreq up to limit via CAS loop.
+func (e *entry[K, V]) incPeakFreq(limit uint32) {
 	for {
-		old := e.freqPeak.Load()
-		p := old >> peakFreqShift
-		if p >= max {
+		cur := e.freqFlags.Load()
+		p := (cur >> peakFreqShift) & peakFreqMask
+		if p >= limit {
 			return
 		}
-		new := (old & freqMask) | ((p + 1) << peakFreqShift)
-		if e.freqPeak.CompareAndSwap(old, new) {
+		// Clear old peakFreq bits, set new value, preserve freq and flags
+		updated := (cur &^ (peakFreqMask << peakFreqShift)) | ((p + 1) << peakFreqShift)
+		if e.freqFlags.CompareAndSwap(cur, updated) {
 			return
 		}
 	}
 }
 
-// setFreqPeak sets both freq and peakFreq atomically.
+// setFreqPeak sets freq and peakFreq, preserving flags. Must be called under mutex.
 func (e *entry[K, V]) setFreqPeak(f, p uint32) {
-	e.freqPeak.Store((f & freqMask) | (p << peakFreqShift))
+	cur := e.freqFlags.Load()
+	flags := cur & (inSmallBit | onDeathRowBit)
+	e.freqFlags.Store((f & freqMask) | ((p & peakFreqMask) << peakFreqShift) | flags)
 }
-
-// hash returns the cached key hash (30 bits).
-func (e *entry[K, V]) hash() uint32 { return e.hashFlags & hashMask }
 
 // inSmall returns true if entry is in small queue.
-func (e *entry[K, V]) inSmall() bool { return e.hashFlags&inSmallBit != 0 }
+func (e *entry[K, V]) inSmall() bool { return e.freqFlags.Load()&inSmallBit != 0 }
 
 // onDeathRow returns true if entry is pending eviction.
-func (e *entry[K, V]) onDeathRow() bool { return e.hashFlags&onDeathRowBit != 0 }
+func (e *entry[K, V]) onDeathRow() bool { return e.freqFlags.Load()&onDeathRowBit != 0 }
 
-// setHash sets the hash value (preserves flags).
-func (e *entry[K, V]) setHash(h uint32) {
-	e.hashFlags = (e.hashFlags &^ hashMask) | (h & hashMask)
-}
-
-// setInSmall sets the inSmall flag.
+// setInSmall sets the inSmall flag. Must be called under mutex.
 func (e *entry[K, V]) setInSmall(v bool) {
+	cur := e.freqFlags.Load()
 	if v {
-		e.hashFlags |= inSmallBit
+		e.freqFlags.Store(cur | inSmallBit)
 	} else {
-		e.hashFlags &^= inSmallBit
+		e.freqFlags.Store(cur &^ inSmallBit)
 	}
 }
 
-// setOnDeathRow sets the onDeathRow flag.
+// setOnDeathRow sets the onDeathRow flag. Must be called under mutex.
 func (e *entry[K, V]) setOnDeathRow(v bool) {
+	cur := e.freqFlags.Load()
 	if v {
-		e.hashFlags |= onDeathRowBit
+		e.freqFlags.Store(cur | onDeathRowBit)
 	} else {
-		e.hashFlags &^= onDeathRowBit
+		e.freqFlags.Store(cur &^ onDeathRowBit)
 	}
 }
 
@@ -378,12 +378,20 @@ func (c *s3fifo[K, V]) get(key K) (V, bool) {
 	if ent.onDeathRow() {
 		return c.resurrectFromDeathRow(key)
 	}
+	//nolint:gosec // G115: Unix seconds fit in uint32 until year 2106
 	if exp := ent.expirySec.Load(); exp != 0 && uint32(time.Now().Unix()) > exp {
 		var zero V
 		return zero, false
 	}
-	ent.incFreq(maxFreq)
-	ent.incPeakFreq(maxPeakFreq)
+	// Hot path: single Load to check if both counters need increment.
+	// Under Zipf, most accesses hit entries already at max - skip CAS loops.
+	flags := ent.freqFlags.Load()
+	if flags&freqMask < maxFreq {
+		ent.incFreq(maxFreq)
+	}
+	if (flags>>peakFreqShift)&peakFreqMask < maxPeakFreq {
+		ent.incPeakFreq(maxPeakFreq)
+	}
 	val, ok := ent.value.Load().(V)
 	return val, ok
 }
@@ -439,8 +447,14 @@ func (c *s3fifo[K, V]) set(key K, value V, expirySec uint32) {
 func (*s3fifo[K, V]) updateEntry(ent *entry[K, V], value V, expirySec uint32) {
 	ent.value.Store(value)
 	ent.expirySec.Store(expirySec)
-	ent.incFreq(maxFreq)
-	ent.incPeakFreq(maxPeakFreq)
+	// Hot path: single Load to check if counters need increment.
+	flags := ent.freqFlags.Load()
+	if flags&freqMask < maxFreq {
+		ent.incFreq(maxFreq)
+	}
+	if (flags>>peakFreqShift)&peakFreqMask < maxPeakFreq {
+		ent.incPeakFreq(maxPeakFreq)
+	}
 }
 
 // setWithHash adds or updates a value. hash=0 means compute when needed.
@@ -469,20 +483,19 @@ func (c *s3fifo[K, V]) setWithHash(key K, value V, expirySec uint32, hash uint64
 		c.freeEntry = nil
 		ent.key = key
 		ent.value.Store(value)
-		ent.setFreqPeak(0, 0)
-		ent.hashFlags = 0 // clear inSmall and onDeathRow
+		ent.freqFlags.Store(0) // clears freq, peakFreq, inSmall, onDeathRow
 	} else {
 		ent = &entry[K, V]{key: key}
 		ent.value.Store(value)
 	}
 	ent.expirySec.Store(expirySec)
 
-	// Cache hash for fast eviction (avoids re-hashing string keys).
+	// Cache full hash for bloom filter (avoids re-hashing on eviction).
 	h := hash
 	if h == 0 {
 		h = c.hasher(key)
 	}
-	ent.setHash(uint32(h))
+	ent.hash64 = h
 
 	full := c.totalEntries.Load() >= int64(c.capacity)
 
@@ -504,6 +517,7 @@ func (c *s3fifo[K, V]) setWithHash(key K, value V, expirySec uint32, hash uint64
 
 		// Restore frequency from ghost for returning keys.
 		if !ent.inSmall() {
+			//nolint:gosec // G115: intentional truncation to 32-bit hash
 			if peak, ok := c.ghostFreqRng.lookup(uint32(h)); ok {
 				ent.setFreqPeak(peak, peak)
 			}
@@ -544,15 +558,14 @@ func (c *s3fifo[K, V]) del(key K) {
 	c.totalEntries.Add(-1)
 }
 
-// addToGhost records an evicted key for future admission decisions.
-// Uses cached hash from entry to avoid re-hashing.
-// Note: bloom Add is idempotent, so we skip Contains check for speed.
-// Entry count may be slightly inflated but rotation timing is approximate anyway.
-func (c *s3fifo[K, V]) addToGhost(h uint32, peakFreq uint32) {
-	h64 := uint64(h)
+// addToGhost records an evicted key's hash for future admission decisions.
+// Bloom filter uses full 64-bit hash for proper double hashing (h2 = h >> 32).
+// Frequency ring uses lower 32 bits (sufficient for collision avoidance).
+func (c *s3fifo[K, V]) addToGhost(h64 uint64, peakFreq uint32) {
 	c.ghostActive.Add(h64)
 	if peakFreq >= 1 {
-		c.ghostFreqRng.add(h, peakFreq)
+		//nolint:gosec // G115: intentional truncation to 32-bit hash
+		c.ghostFreqRng.add(uint32(h64), peakFreq)
 	}
 	if c.ghostActive.entries >= c.ghostCap {
 		c.ghostAging.Reset()
@@ -669,7 +682,7 @@ func (c *s3fifo[K, V]) sendToDeathRow(e *entry[K, V]) {
 	}
 	if e.peakFreq() < threshold {
 		c.entries.Delete(e.key)
-		c.addToGhost(e.hash(), e.peakFreq())
+		c.addToGhost(e.hash64, e.peakFreq())
 		e.prev, e.next = nil, nil
 		c.freeEntry = e
 		c.totalEntries.Add(-1)
@@ -679,7 +692,7 @@ func (c *s3fifo[K, V]) sendToDeathRow(e *entry[K, V]) {
 	// If death row slot is occupied, truly evict that entry first.
 	if old := c.deathRow[c.deathRowPos]; old != nil {
 		c.entries.Delete(old.key)
-		c.addToGhost(old.hash(), old.peakFreq())
+		c.addToGhost(old.hash64, old.peakFreq())
 		old.setOnDeathRow(false)
 		// Recycle entry for reuse (reduces allocations).
 		old.prev, old.next = nil, nil

@@ -74,6 +74,7 @@ func (c *Cache[K, V]) SetTTL(key K, value V, ttl time.Duration) {
 		c.memory.set(key, value, 0)
 		return
 	}
+	//nolint:gosec // G115: Unix seconds fit in uint32 until year 2106
 	c.memory.set(key, value, uint32(time.Now().Add(ttl).Unix()))
 }
 
