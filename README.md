@@ -70,13 +70,13 @@ fido has been exhaustively tested for performance using [gocachemark](https://gi
 
 Where fido wins:
 
-- **Throughput**: 551M int gets/sec avg (2.4X faster than otter). 89M string sets/sec avg (27X faster than otter).
-- **Hit rate**: Wins 6 of 9 workloads. Highest average across all datasets (+2.7% vs otter, +0.9% vs sieve).
-- **Latency**: 8ns int gets, 10ns string gets, zero allocations (3.5X lower latency than otter)
+- **Throughput**: 744M int gets/sec avg (2.7X faster than otter). 95M string sets/sec avg (26X faster than otter).
+- **Hit rate**: Wins 6 of 9 workloads. Highest average across all datasets (+2.9% vs otter, +0.9% vs sieve).
+- **Latency**: 8ns int gets, 10ns string gets, zero allocations (7X lower latency than otter)
 
 Where others win:
 
-- **Memory**: freelru and otter use less memory per entry (73 bytes/item overhead vs 14 for otter)
+- **Memory**: freelru and otter use less memory per entry (49 bytes/item overhead vs 15 for otter)
 - **Specific workloads**: sieve +0.5% on thesios-block, clock +0.1% on ibm-docker, theine +0.6% on zipf
 
 Much of the credit for high throughput goes to [puzpuzpuz/xsync](https://github.com/puzpuzpuz/xsync) and its lock-free data structures.
@@ -89,11 +89,11 @@ fido uses [S3-FIFO](https://s3fifo.com/), which features three queues: small (ne
 
 fido has been hyper-tuned for high performance, and deviates from the original paper in a handful of ways:
 
-- **Tuned small queue** - 13.7% vs paper's 10%, tuned via binary search to maximize average hit rate across 9 production traces
+- **Size-adaptive small queue** - 12-15% vs paper's 10%, interpolated per cache size via binary search tuning
 - **Full ghost frequency restoration** - returning keys restore 100% of their previous access count
 - **Increased frequency cap** - max freq=5 vs paper's 3, tuned via binary search for best average hit rate
 - **Death row** - hot items (high peakFreq) get a second chance before eviction
-- **Extended ghost capacity** - 1.22x cache size for ghost tracking, tuned via binary search
+- **Size-adaptive ghost capacity** - 0.9x to 2.2x cache size, larger caches need more ghost tracking
 - **Ghost frequency ring buffer** - fixed-size 256-entry ring replaces map allocations
 
 ## License
