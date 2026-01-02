@@ -10,7 +10,9 @@
 
 fido is a high-performance cache for Go, focusing on high hit-rates, high throughput, and low latency. Optimized using the best algorithms and lock-free data structures, nobody fetches better than Fido. Designed to thrive in unstable environments like Kubernetes, Cloud Run, or Borg, it also features an optional multi-tier persistence architecture.
 
-As of January 2026, nobody fetches better - and we have the benchmarks to prove it.
+As of January 2026, nobody fetches better - and we have the [benchmarks](https://github.com/tstromberg/gocachemark/blob/main/latest/gocachemark-results.pdf) to prove it.
+
+<img src="media/benchmarks-small.png" alt="benchmarks">
 
 ## Install
 
